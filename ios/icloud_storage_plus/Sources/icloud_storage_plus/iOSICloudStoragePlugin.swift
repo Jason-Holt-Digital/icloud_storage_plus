@@ -21,6 +21,14 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
     queue.qualityOfService = .userInitiated
     return queue
   }()
+  private let ubiquityContainerResolver: UbiquityContainerResolver
+
+  init(
+    ubiquityContainerResolver: UbiquityContainerResolver = .live
+  ) {
+    self.ubiquityContainerResolver = ubiquityContainerResolver
+    super.init()
+  }
 
   /// Registers the plugin with the Flutter registrar.
   public static func register(with registrar: FlutterPluginRegistrar) {
@@ -122,11 +130,27 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
       return
     }
 
-    guard let containerURL = FileManager.default.url(forUbiquityContainerIdentifier: containerId)
-    else {
-      result(containerAccessError(operation: "gather"))
-      return
+    Task { @MainActor [self] in
+      guard let containerURL = await ubiquityContainerResolver.resolve(
+        containerId: containerId
+      ) else {
+        result(containerAccessError(operation: "gather"))
+        return
+      }
+
+      startGather(
+        containerURL: containerURL,
+        eventChannelName: eventChannelName,
+        result: result
+      )
     }
+  }
+
+  private func startGather(
+    containerURL: URL,
+    eventChannelName: String,
+    result: @escaping FlutterResult
+  ) {
     DebugHelper.log("containerURL: \(containerURL.path)")
 
     // Verify event channel handler exists before registering observers

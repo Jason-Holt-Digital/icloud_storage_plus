@@ -165,6 +165,35 @@ void main() {
       expect(eventChannelName, isNotNull);
       expect(eventChannelName, isNotEmpty);
     });
+
+    test('maps structured container access failures', () async {
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, (methodCall) async {
+        if (methodCall.method == 'gather') {
+          throw PlatformException(
+            code: PlatformExceptionCode.iCloudConnectionOrPermission,
+            message: 'Container unavailable',
+            details: {
+              'category': 'containerAccess',
+              'operation': 'gather',
+              'retryable': false,
+            },
+          );
+        }
+        return null;
+      });
+
+      await expectLater(
+        () => platform.gather(containerId: containerId),
+        throwsA(
+          isA<ICloudContainerAccessException>().having(
+            (error) => error.operation,
+            'operation',
+            'gather',
+          ),
+        ),
+      );
+    });
   });
 
   group('uploadFile tests:', () {
