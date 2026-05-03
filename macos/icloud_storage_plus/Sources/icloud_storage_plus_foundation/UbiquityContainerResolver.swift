@@ -6,7 +6,7 @@ struct UbiquityContainerResolver {
         @escaping @Sendable () -> URL?
     ) async -> URL?
     typealias ResolveContainerURL = (String) -> URL?
-    typealias Delay = (TimeInterval) async -> Void
+    typealias Delay = (TimeInterval) async throws -> Void
 
     static let maxAttempts = 2
     static let maximumRetryDelay: TimeInterval = 0.15
@@ -25,7 +25,13 @@ struct UbiquityContainerResolver {
             }
 
             if attempt < Self.maxAttempts - 1 {
-                await delay(clampedRetryDelay)
+                do {
+                    try await delay(clampedRetryDelay)
+                } catch is CancellationError {
+                    return nil
+                } catch {
+                    return nil
+                }
             }
         }
 
@@ -53,7 +59,7 @@ extension UbiquityContainerResolver {
         },
         delay: { delay in
             let nanoseconds = UInt64(delay * 1_000_000_000)
-            try? await Task.sleep(nanoseconds: nanoseconds)
+            try await Task.sleep(nanoseconds: nanoseconds)
         },
         retryDelay: maximumRetryDelay
     )

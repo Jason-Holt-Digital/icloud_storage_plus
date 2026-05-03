@@ -163,14 +163,11 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
       return
     }
 
-    Task { @MainActor [self] in
-      guard let containerURL = await ubiquityContainerResolver.resolve(
-        containerId: containerId
-      ) else {
-        result(containerAccessError(operation: "gather"))
-        return
-      }
-
+    resolveContainerURL(
+      containerId: containerId,
+      operation: "gather",
+      result: result
+    ) { [self] containerURL in
       startGather(
         containerURL: containerURL,
         eventChannelName: eventChannelName,

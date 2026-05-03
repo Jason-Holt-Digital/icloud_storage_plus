@@ -99,6 +99,24 @@ final class UbiquityContainerResolverTests: XCTestCase {
         )
     }
 
+    func testResolveStopsAfterCancelledRetryDelay() async {
+        var attempts = 0
+        let resolver = UbiquityContainerResolver(
+            execute: { work in work() },
+            resolveContainerURL: { _ in
+                attempts += 1
+                return nil
+            },
+            delay: { _ in throw CancellationError() },
+            retryDelay: UbiquityContainerResolver.maximumRetryDelay
+        )
+
+        let containerURL = await resolver.resolve(containerId: "cancelled")
+
+        XCTAssertNil(containerURL)
+        XCTAssertEqual(attempts, 1)
+    }
+
     private func makeTemporaryDirectory() throws -> URL {
         let temporaryDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
