@@ -356,8 +356,78 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
     return nativeCodeError(
       error,
       operation: operation,
-      relativePath: relativePath
+      relativePath: relativePath,
+      pathKind: "containerParentDirectory"
     )
+  }
+
+  private func mapNativeWriteError(
+    _ error: Error,
+    operation: String,
+    relativePath: String,
+    destinationURL: URL
+  ) -> FlutterError {
+    let nsError = error as NSError
+    return mapFileNotFoundError(
+      error,
+      operation: operation,
+      relativePath: relativePath,
+      pathKind: nativeWritePathKind(
+        for: nsError,
+        destinationURL: destinationURL
+      )
+    ) ?? mapTimeoutError(
+      error,
+      operation: operation,
+      relativePath: relativePath,
+      pathKind: "containerRelative"
+    ) ?? nativeCodeError(
+      error,
+      operation: operation,
+      relativePath: relativePath,
+      pathKind: nativeWritePathKind(
+        for: nsError,
+        destinationURL: destinationURL
+      )
+    )
+  }
+
+  private func nativeWritePathKind(
+    for nativeError: NSError,
+    destinationURL: URL
+  ) -> String {
+    guard let nativePath = nativeError.userInfo[NSFilePathErrorKey] as? String
+    else {
+      return "containerRelative"
+    }
+
+    let standardizedNativePath = URL(fileURLWithPath: nativePath)
+      .standardizedFileURL
+      .path
+    let standardizedDestinationPath = destinationURL
+      .standardizedFileURL
+      .path
+    if standardizedNativePath == standardizedDestinationPath {
+      return "destination"
+    }
+
+    let temporaryPath = FileManager.default.temporaryDirectory
+      .standardizedFileURL
+      .path
+    let normalizedTemporaryPath = temporaryPath.hasSuffix("/")
+      ? temporaryPath
+      : temporaryPath + "/"
+    if standardizedNativePath.hasPrefix(normalizedTemporaryPath) {
+      return "temporaryReplacement"
+    }
+
+    return "nativeFilePath"
+  }
+
+  private func isFileContentWriteOperation(_ operation: String) -> Bool {
+    operation == "uploadFile"
+      || operation == "writeInPlace"
+      || operation == "writeInPlaceBytes"
   }
 
   /// Copies a local file into the iCloud container (copy-in).
@@ -767,18 +837,11 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
 
       writeInPlaceDocument(at: fileURL, contents: contents) { [self] error in
         if let error = error {
-          let mapped = mapFileNotFoundError(
+          let mapped = mapNativeWriteError(
             error,
             operation: "writeInPlace",
-            relativePath: relativePath
-          ) ?? mapTimeoutError(
-            error,
-            operation: "writeInPlace",
-            relativePath: relativePath
-          ) ?? nativeCodeError(
-            error,
-            operation: "writeInPlace",
-            relativePath: relativePath
+            relativePath: relativePath,
+            destinationURL: fileURL
           )
           result(mapped)
           return
@@ -906,18 +969,11 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
       writeInPlaceBinaryDocument(at: fileURL, contents: contents.data) {
         [self] error in
         if let error = error {
-          let mapped = mapFileNotFoundError(
+          let mapped = mapNativeWriteError(
             error,
             operation: "writeInPlaceBytes",
-            relativePath: relativePath
-          ) ?? mapTimeoutError(
-            error,
-            operation: "writeInPlaceBytes",
-            relativePath: relativePath
-          ) ?? nativeCodeError(
-            error,
-            operation: "writeInPlaceBytes",
-            relativePath: relativePath
+            relativePath: relativePath,
+            destinationURL: fileURL
           )
           result(mapped)
           return
@@ -1649,6 +1705,7 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
     operation: String,
     retryable: Bool,
     relativePath: String? = nil,
+    pathKind: String? = nil,
     nativeError: NSError? = nil,
     underlying: Any? = nil
   ) -> FlutterError {
@@ -1659,6 +1716,9 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
     ]
     if let relativePath {
       details["relativePath"] = relativePath
+    }
+    if let pathKind {
+      details["pathKind"] = pathKind
     }
     if let nativeError {
       details["nativeDomain"] = nativeError.domain
@@ -1693,7 +1753,8 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
     relativePath: String? = nil,
     code: String = "E_FNF",
     message: String = "The file does not exist",
-    nativeError: NSError? = nil
+    nativeError: NSError? = nil,
+    pathKind: String? = nil
   ) -> FlutterError {
     flutterError(
       code: code,
@@ -1702,6 +1763,7 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
       operation: operation,
       retryable: false,
       relativePath: relativePath,
+      pathKind: pathKind,
       nativeError: nativeError
     )
   }
@@ -1709,7 +1771,8 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
   private func timeoutError(
     operation: String,
     relativePath: String? = nil,
-    nativeError: NSError? = nil
+    nativeError: NSError? = nil,
+    pathKind: String? = nil
   ) -> FlutterError {
     flutterError(
       code: "E_TIMEOUT",
@@ -1718,6 +1781,7 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
       operation: operation,
       retryable: true,
       relativePath: relativePath,
+      pathKind: pathKind,
       nativeError: nativeError
     )
   }
@@ -1726,7 +1790,8 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
   private func mapFileNotFoundError(
     _ error: Error,
     operation: String = "unknown",
-    relativePath: String? = nil
+    relativePath: String? = nil,
+    pathKind: String? = nil
   ) -> FlutterError? {
     let nsError = error as NSError
     guard nsError.domain == NSCocoaErrorDomain else { return nil }
@@ -1739,13 +1804,15 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
           relativePath: relativePath,
           code: "E_FNF_WRITE",
           message: "The file could not be written because it does not exist",
-          nativeError: nsError
+          nativeError: nsError,
+          pathKind: pathKind
         )
       }
       return itemNotFoundError(
         operation: operation,
         relativePath: relativePath,
-        nativeError: nsError
+        nativeError: nsError,
+        pathKind: pathKind
       )
     case NSFileReadNoSuchFileError:
       return itemNotFoundError(
@@ -1753,7 +1820,8 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
         relativePath: relativePath,
         code: "E_FNF_READ",
         message: "The file could not be read because it does not exist",
-        nativeError: nsError
+        nativeError: nsError,
+        pathKind: pathKind
       )
     default:
       return nil
@@ -1764,7 +1832,8 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
   private func nativeCodeError(
     _ error: Error,
     operation: String = "unknown",
-    relativePath: String? = nil
+    relativePath: String? = nil,
+    pathKind: String? = nil
   ) -> FlutterError {
     let nsError = error as NSError
 
@@ -1778,6 +1847,7 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
           operation: operation,
           retryable: false,
           relativePath: relativePath,
+          pathKind: pathKind,
           nativeError: nsError
         )
       case CoordinatedReplaceWriter.itemNotDownloadedReplaceStateCode:
@@ -1788,6 +1858,7 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
           operation: operation,
           retryable: true,
           relativePath: relativePath,
+          pathKind: pathKind,
           nativeError: nsError
         )
       case CoordinatedReplaceWriter.downloadInProgressReplaceStateCode:
@@ -1798,6 +1869,7 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
           operation: operation,
           retryable: true,
           relativePath: relativePath,
+          pathKind: pathKind,
           nativeError: nsError
         )
       case CoordinatedReplaceWriter.directoryReplaceStateCode:
@@ -1808,6 +1880,38 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
           operation: operation,
           retryable: false,
           relativePath: relativePath,
+          pathKind: pathKind,
+          nativeError: nsError
+        )
+      case CoordinatedReplaceWriter.coordinationReplaceStateCode:
+        return flutterError(
+          code: "E_COORDINATION",
+          message: nsError.localizedDescription,
+          category: "coordination",
+          operation: operation,
+          retryable: false,
+          relativePath: relativePath,
+          pathKind: pathKind,
+          nativeError: nsError
+        )
+      default:
+        break
+      }
+    }
+
+    if isFileContentWriteOperation(operation)
+      && nsError.domain == NSCocoaErrorDomain {
+      switch nsError.code {
+      case NSFileWriteInvalidFileNameError,
+           NSFileWriteUnsupportedSchemeError:
+        return flutterError(
+          code: "E_ARG",
+          message: nsError.localizedDescription,
+          category: "invalidArgument",
+          operation: operation,
+          retryable: false,
+          relativePath: relativePath,
+          pathKind: pathKind,
           nativeError: nsError
         )
       default:
@@ -1822,6 +1926,7 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
       operation: operation,
       retryable: false,
       relativePath: relativePath,
+      pathKind: pathKind,
       nativeError: nsError,
       underlying: String(describing: error)
     )
@@ -1830,14 +1935,16 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
   private func mapTimeoutError(
     _ error: Error,
     operation: String = "unknown",
-    relativePath: String? = nil
+    relativePath: String? = nil,
+    pathKind: String? = nil
   ) -> FlutterError? {
     let nsError = error as NSError
     guard nsError.domain == "ICloudStorageTimeout" else { return nil }
     return timeoutError(
       operation: operation,
       relativePath: relativePath,
-      nativeError: nsError
+      nativeError: nsError,
+      pathKind: pathKind
     )
   }
 }

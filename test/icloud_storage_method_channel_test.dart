@@ -412,6 +412,56 @@ void main() {
         throwsA(isA<ICloudInvalidArgumentException>()),
       );
     });
+
+    test('writeInPlace preserves unknown native write enrichment', () async {
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, (methodCall) async {
+        if (methodCall.method == 'writeInPlace') {
+          throw PlatformException(
+            code: PlatformExceptionCode.nativeCodeError,
+            message: 'Native Code Error',
+            details: {
+              'category': 'unknownNative',
+              'operation': 'writeInPlace',
+              'retryable': false,
+              'relativePath': 'Documents/test.json',
+              'pathKind': 'temporaryReplacement',
+              'nativeDomain': 'NSCocoaErrorDomain',
+              'nativeCode': 640,
+              'nativeDescription': 'The volume is out of space.',
+            },
+          );
+        }
+        return null;
+      });
+
+      await expectLater(
+        () => platform.writeInPlace(
+          containerId: containerId,
+          relativePath: 'Documents/test.json',
+          contents: '{"ok":true}',
+        ),
+        throwsA(
+          isA<ICloudUnknownNativeException>()
+              .having(
+                (error) => error.operation,
+                'operation',
+                'writeInPlace',
+              )
+              .having(
+                (error) => error.pathKind,
+                'pathKind',
+                'temporaryReplacement',
+              )
+              .having(
+                (error) => error.nativeDomain,
+                'nativeDomain',
+                'NSCocoaErrorDomain',
+              )
+              .having((error) => error.nativeCode, 'nativeCode', 640),
+        ),
+      );
+    });
   });
 
   group('writeInPlaceBytes tests:', () {
@@ -452,6 +502,47 @@ void main() {
           contents: Uint8List.fromList([4, 5, 6]),
         ),
         throwsA(isA<ICloudTimeoutException>()),
+      );
+    });
+
+    test('writeInPlaceBytes maps structured coordination payloads', () async {
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, (methodCall) async {
+        if (methodCall.method == 'writeInPlaceBytes') {
+          throw PlatformException(
+            code: PlatformExceptionCode.coordination,
+            message: 'File coordination failed while replacing an iCloud item.',
+            details: {
+              'category': 'coordination',
+              'operation': 'writeInPlaceBytes',
+              'retryable': false,
+              'relativePath': 'Documents/data.bin',
+              'pathKind': 'destination',
+              'nativeDomain': 'ICloudStoragePlusErrorDomain',
+              'nativeCode': 5,
+              'nativeDescription':
+                  'File coordination failed while replacing an iCloud item.',
+            },
+          );
+        }
+        return null;
+      });
+
+      await expectLater(
+        () => platform.writeInPlaceBytes(
+          containerId: containerId,
+          relativePath: 'Documents/data.bin',
+          contents: Uint8List.fromList([4, 5, 6]),
+        ),
+        throwsA(
+          isA<ICloudCoordinationException>()
+              .having(
+                (error) => error.operation,
+                'operation',
+                'writeInPlaceBytes',
+              )
+              .having((error) => error.pathKind, 'pathKind', 'destination'),
+        ),
       );
     });
   });

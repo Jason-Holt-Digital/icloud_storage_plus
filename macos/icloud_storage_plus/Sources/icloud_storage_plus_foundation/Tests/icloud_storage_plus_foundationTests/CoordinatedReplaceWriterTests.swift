@@ -760,6 +760,31 @@ final class CoordinatedReplaceWriterTests: XCTestCase {
         )
     }
 
+    func testCoordinationErrorPreservesUnderlyingNativeSignature() {
+        let underlying = NSError(
+            domain: NSCocoaErrorDomain,
+            code: NSFileWriteUnknownError,
+            userInfo: [NSLocalizedDescriptionKey: "coordination failed"]
+        )
+
+        let wrapped = CoordinatedReplaceWriter.coordinationError(
+            underlying: underlying
+        )
+
+        XCTAssertEqual(
+            wrapped.domain,
+            CoordinatedReplaceWriter.replaceStateErrorDomain
+        )
+        XCTAssertEqual(
+            wrapped.code,
+            CoordinatedReplaceWriter.coordinationReplaceStateCode
+        )
+        XCTAssertEqual(
+            wrapped.userInfo[NSUnderlyingErrorKey] as? NSError,
+            underlying
+        )
+    }
+
     // MARK: - Slice C: deadlock-free coord bridge contract
 
     func testLiveCoordinateReplaceDoesNotStarveCooperativePool() async throws {

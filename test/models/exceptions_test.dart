@@ -13,6 +13,7 @@ void main() {
           'operation': 'readInPlace',
           'retryable': true,
           'relativePath': 'Documents/file.txt',
+          'pathKind': 'containerRelative',
           'nativeDomain': 'NSCocoaErrorDomain',
           'nativeCode': 42,
           'nativeDescription': 'Description',
@@ -25,6 +26,14 @@ void main() {
       final exception = mapICloudPlatformException(buildError('conflict'));
 
       expect(exception, isA<ICloudConflictException>());
+    });
+
+    test('preserves non-PII native path kind enrichment', () {
+      final exception = mapICloudPlatformException(buildError('unknownNative'));
+
+      expect(exception.pathKind, 'containerRelative');
+      expect(exception.nativeDomain, 'NSCocoaErrorDomain');
+      expect(exception.nativeCode, 42);
     });
 
     test('maps itemNotFound category to ICloudItemNotFoundException', () {

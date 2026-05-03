@@ -80,6 +80,7 @@ extension CoordinatedReplaceWriter {
     static let itemNotDownloadedReplaceStateCode = 2
     static let downloadInProgressReplaceStateCode = 3
     static let directoryReplaceStateCode = 4
+    static let coordinationReplaceStateCode = 5
     static let autoResolveFailedDescriptionMarker = "auto-resolution failed"
 
     static func fileDestinationError(isDirectory: Bool) -> NSError? {
@@ -160,6 +161,18 @@ extension CoordinatedReplaceWriter {
                     + "\(autoResolveFailedDescriptionMarker) — "
                     + underlyingNSError.localizedDescription,
                 NSUnderlyingErrorKey: underlyingNSError,
+            ]
+        )
+    }
+
+    static func coordinationError(underlying: NSError) -> NSError {
+        NSError(
+            domain: replaceStateErrorDomain,
+            code: coordinationReplaceStateCode,
+            userInfo: [
+                NSLocalizedDescriptionKey:
+                    "File coordination failed while replacing an iCloud item.",
+                NSUnderlyingErrorKey: underlying,
             ]
         )
     }
@@ -274,7 +287,9 @@ extension CoordinatedReplaceWriter {
                 }
 
                 if let coordinationError {
-                    continuation.resume(throwing: coordinationError)
+                    continuation.resume(throwing: Self.coordinationError(
+                        underlying: coordinationError
+                    ))
                     return
                 }
                 if let accessError {
