@@ -18,6 +18,7 @@ container, with document coordination via UIDocument/NSDocument.
     'icloud_storage_plus/Sources/icloud_storage_plus/**/*.{h,m,swift}',
     'icloud_storage_plus/Sources/icloud_storage_plus_foundation/CoordinatedReplaceWriter.swift',
     'icloud_storage_plus/Sources/icloud_storage_plus_foundation/DownloadWaiter.swift',
+    'icloud_storage_plus/Sources/icloud_storage_plus_foundation/MetadataQuerySession.swift',
     'icloud_storage_plus/Sources/icloud_storage_plus_foundation/ConflictResolver.swift',
     'icloud_storage_plus/Sources/icloud_storage_plus_foundation/WriteEntrypointPreflight.swift',
     'icloud_storage_plus/Sources/icloud_storage_plus_foundation/UbiquityContainerResolver.swift',

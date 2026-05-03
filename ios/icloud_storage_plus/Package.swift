@@ -28,6 +28,7 @@ let package = Package(
                 "icloud_storage_plus",
                 "icloud_storage_plus_foundation/CoordinatedReplaceWriter.swift",
                 "icloud_storage_plus_foundation/DownloadWaiter.swift",
+                "icloud_storage_plus_foundation/MetadataQuerySession.swift",
                 "icloud_storage_plus_foundation/ConflictResolver.swift",
                 "icloud_storage_plus_foundation/WriteEntrypointPreflight.swift",
                 "icloud_storage_plus_foundation/UbiquityContainerResolver.swift",

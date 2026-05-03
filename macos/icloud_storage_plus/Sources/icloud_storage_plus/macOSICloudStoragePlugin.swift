@@ -10,9 +10,11 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
     label: "icloud_storage_plus.stream_state"
   )
   let querySearchScopes = iCloudMetadataQuerySearchScopes
-  private var queryObservers: [ObjectIdentifier: [NSObjectProtocol]] = [:]
-  private let queryObserversQueue = DispatchQueue(
-    label: "icloud_storage_plus.query_observers"
+  private var metadataQuerySessions: [
+    MetadataQuerySession.ID: MetadataQuerySession
+  ] = [:]
+  private let metadataQuerySessionsQueue = DispatchQueue(
+    label: "icloud_storage_plus.metadata_query_sessions"
   )
   private let metadataQueryOperationQueue: OperationQueue = {
     let queue = OperationQueue()
@@ -28,6 +30,15 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
   ) {
     self.ubiquityContainerResolver = ubiquityContainerResolver
     super.init()
+  }
+
+  deinit {
+    let sessions = metadataQuerySessionsQueue.sync {
+      Array(metadataQuerySessions.values)
+    }
+    for session in sessions {
+      session.cancel()
+    }
   }
 
   /// Registers the plugin with the Flutter registrar.
@@ -176,30 +187,38 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
     query.operationQueue = metadataQueryOperationQueue
     query.searchScopes = querySearchScopes
     query.predicate = NSPredicate(format: "%K beginswith %@", NSMetadataItemPathKey, containerURL.path)
-    addGatherFilesObservers(query: query, containerURL: containerURL, eventChannelName: eventChannelName, result: result)
+    let session = makeMetadataQuerySession(query: query)
+    addGatherFilesObservers(
+      session: session,
+      containerURL: containerURL,
+      eventChannelName: eventChannelName,
+      result: result
+    )
 
     if let streamHandler {
-      streamHandler.onCancelHandler = { [self] in
-        removeObservers(query)
-        query.stop()
-        removeStreamHandler(eventChannelName)
+      streamHandler.onCancelHandler = { [weak self, weak session] in
+        session?.cancel()
+        self?.removeStreamHandler(eventChannelName)
       }
     }
-    query.start()
+    session.start()
   }
   
   /// Adds observers for metadata gather and update notifications.
-  private func addGatherFilesObservers(query: NSMetadataQuery, containerURL: URL, eventChannelName: String, result: @escaping FlutterResult) {
-    addObserver(
-      for: query,
+  private func addGatherFilesObservers(session: MetadataQuerySession, containerURL: URL, eventChannelName: String, result: @escaping FlutterResult) {
+    session.addObserver(
       name: NSNotification.Name.NSMetadataQueryDidFinishGathering
-    ) { [self] _ in
+    ) { [weak self] session, query, _ in
+      guard let self else { return }
       query.disableUpdates()
-      defer { query.enableUpdates() }
+      defer {
+        if !session.isCancelled {
+          query.enableUpdates()
+        }
+      }
       let results = query.results.compactMap { $0 as? NSMetadataItem }
       if eventChannelName.isEmpty {
-        removeObservers(query)
-        query.stop()
+        session.cancel()
       }
 
       let files = mapFileAttributes(items: results, containerURL: containerURL)
@@ -209,16 +228,20 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
     }
     
     if !eventChannelName.isEmpty {
-      addObserver(
-        for: query,
+      session.addObserver(
         name: NSNotification.Name.NSMetadataQueryDidUpdate
-      ) { [self] _ in
+      ) { [weak self] session, query, _ in
+        guard let self else { return }
         guard hasStreamHandler(named: eventChannelName) else {
           return
         }
 
         query.disableUpdates()
-        defer { query.enableUpdates() }
+        defer {
+          if !session.isCancelled {
+            query.enableUpdates()
+          }
+        }
         let results = query.results.compactMap { $0 as? NSMetadataItem }
         let files = mapFileAttributes(items: results, containerURL: containerURL)
         DispatchQueue.main.async {
@@ -405,49 +428,52 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
     query.operationQueue = .main
     query.searchScopes = querySearchScopes
     query.predicate = NSPredicate(format: "%K == %@", NSMetadataItemPathKey, cloudFileURL.path)
+    let session = makeMetadataQuerySession(query: query)
 
     guard let uploadStreamHandler = registeredStreamHandler(
       for: eventChannelName
     ) else {
+      session.cancel()
       return
     }
     emitProgress(10.0, eventChannelName: eventChannelName)
-    uploadStreamHandler.onCancelHandler = { [self] in
-      removeObservers(query)
-      query.stop()
-      removeStreamHandler(eventChannelName)
+    uploadStreamHandler.onCancelHandler = { [weak self, weak session] in
+      session?.cancel()
+      self?.removeStreamHandler(eventChannelName)
     }
     addUploadObservers(
-      query: query,
+      session: session,
       cloudRelativePath: cloudRelativePath,
       eventChannelName: eventChannelName
     )
 
-    query.start()
+    session.start()
   }
   
   /// Adds observers for upload progress updates.
   private func addUploadObservers(
-    query: NSMetadataQuery,
+    session: MetadataQuerySession,
     cloudRelativePath: String,
     eventChannelName: String
   ) {
-    addObserver(
-      for: query,
+    session.addObserver(
       name: NSNotification.Name.NSMetadataQueryDidFinishGathering
-    ) { [self] _ in
+    ) { [weak self] session, query, _ in
+      guard let self else { return }
       onUploadQueryNotification(
+        session: session,
         query: query,
         cloudRelativePath: cloudRelativePath,
         eventChannelName: eventChannelName
       )
     }
     
-    addObserver(
-      for: query,
+    session.addObserver(
       name: NSNotification.Name.NSMetadataQueryDidUpdate
-    ) { [self] _ in
+    ) { [weak self] session, query, _ in
+      guard let self else { return }
       onUploadQueryNotification(
+        session: session,
         query: query,
         cloudRelativePath: cloudRelativePath,
         eventChannelName: eventChannelName
@@ -457,11 +483,12 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
   
   /// Emits upload progress updates to the event channel.
   private func onUploadQueryNotification(
+    session: MetadataQuerySession,
     query: NSMetadataQuery,
     cloudRelativePath: String,
     eventChannelName: String
   ) {
-    if !query.isStarted {
+    if session.isCancelled || !query.isStarted {
       return
     }
 
@@ -488,8 +515,7 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
         relativePath: cloudRelativePath
       ))
       streamHandler.setEvent(FlutterEndOfEventStream)
-      removeObservers(query)
-      query.stop()
+      session.cancel()
       removeStreamHandler(eventChannelName)
       return
     }
@@ -503,8 +529,7 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
           return
         }
         streamHandler.setEvent(FlutterEndOfEventStream)
-        removeObservers(query)
-        query.stop()
+        session.cancel()
         removeStreamHandler(eventChannelName)
       }
     }
@@ -556,7 +581,7 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
         result(value)
       }
 
-      let query: NSMetadataQuery? = eventChannelName.isEmpty
+      let downloadSession: MetadataQuerySession? = eventChannelName.isEmpty
         ? nil
         : {
             let query = NSMetadataQuery()
@@ -567,31 +592,31 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
               NSMetadataItemPathKey,
               cloudFileURL.path
             )
-            return query
+            return makeMetadataQuerySession(query: query)
           }()
 
       let downloadStreamHandler = registeredStreamHandler(for: eventChannelName)
-      downloadStreamHandler?.onCancelHandler = { [self] in
-        if let query {
-          removeObservers(query)
-          query.stop()
-        }
-        removeStreamHandler(eventChannelName)
-        completeOnce(
-          FlutterError(
-            code: "E_CANCEL",
-            message: "Download canceled",
-            details: nil
+      if let downloadSession {
+        downloadStreamHandler?.onCancelHandler = {
+          [weak self, weak downloadSession] in
+          downloadSession?.cancel()
+          self?.removeStreamHandler(eventChannelName)
+          completeOnce(
+            FlutterError(
+              code: "E_CANCEL",
+              message: "Download canceled",
+              details: nil
+            )
           )
-        )
+        }
       }
 
-      if let query {
+      if let downloadSession {
         addDownloadObservers(
-          query: query,
+          session: downloadSession,
           eventChannelName: eventChannelName
         )
-        query.start()
+        downloadSession.start()
       }
       if downloadStreamHandler != nil {
         emitProgress(10.0, eventChannelName: eventChannelName)
@@ -614,10 +639,7 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
           )
           downloadStreamHandler?.setEvent(mapped)
           downloadStreamHandler?.setEvent(FlutterEndOfEventStream)
-          if let query {
-            removeObservers(query)
-            query.stop()
-          }
+          downloadSession?.cancel()
           removeStreamHandler(eventChannelName)
           completeOnce(mapped)
           return
@@ -625,10 +647,7 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
 
         emitProgress(100.0, eventChannelName: eventChannelName)
         downloadStreamHandler?.setEvent(FlutterEndOfEventStream)
-        if let query {
-          removeObservers(query)
-          query.stop()
-        }
+        downloadSession?.cancel()
         removeStreamHandler(eventChannelName)
         completeOnce(nil)
       }
@@ -910,24 +929,26 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
   
   /// Adds observers for download progress updates.
   private func addDownloadObservers(
-    query: NSMetadataQuery,
+    session: MetadataQuerySession,
     eventChannelName: String
   ) {
-    addObserver(
-      for: query,
+    session.addObserver(
       name: NSNotification.Name.NSMetadataQueryDidFinishGathering
-    ) { [self] _ in
+    ) { [weak self] session, query, _ in
+      guard let self else { return }
       emitDownloadProgress(
+        session: session,
         query: query,
         eventChannelName: eventChannelName
       )
     }
     
-    addObserver(
-      for: query,
+    session.addObserver(
       name: NSNotification.Name.NSMetadataQueryDidUpdate
-    ) { [self] _ in
+    ) { [weak self] session, query, _ in
+      guard let self else { return }
       emitDownloadProgress(
+        session: session,
         query: query,
         eventChannelName: eventChannelName
       )
@@ -936,10 +957,11 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
   
   /// Emits download progress updates.
   private func emitDownloadProgress(
+    session: MetadataQuerySession,
     query: NSMetadataQuery,
     eventChannelName: String
   ) {
-    if !query.isStarted {
+    if session.isCancelled || !query.isStarted {
       return
     }
     guard let fileItem = query.results.first as? NSMetadataItem else { return }
@@ -1514,38 +1536,26 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
     return true
   }
   
-  /// Adds an observers for a metadata query.
-  private func addObserver(
-    for query: NSMetadataQuery,
-    name: Notification.Name,
-    using block: @escaping (Notification) -> Void
-  ) {
-    let token = NotificationCenter.default.addObserver(
-      forName: name,
-      object: query,
-      queue: query.operationQueue,
-      using: block
-    )
-    let key = ObjectIdentifier(query)
-    queryObserversQueue.sync {
-      var tokens = queryObservers[key] ?? []
-      tokens.append(token)
-      queryObservers[key] = tokens
+  /// Creates and retains a metadata query session until cleanup completes.
+  private func makeMetadataQuerySession(
+    query: NSMetadataQuery
+  ) -> MetadataQuerySession {
+    let session = MetadataQuerySession(query: query) { [weak self] session in
+      self?.releaseMetadataQuerySession(session)
     }
+    metadataQuerySessionsQueue.sync {
+      metadataQuerySessions[session.id] = session
+    }
+    return session
   }
 
-  /// Removes all observers for a metadata query.
-  private func removeObservers(_ query: NSMetadataQuery) {
-    let key = ObjectIdentifier(query)
-    let tokens: [NSObjectProtocol]? = queryObserversQueue.sync {
-      queryObservers[key]
-    }
-    guard let tokens else { return }
-    for token in tokens {
-      NotificationCenter.default.removeObserver(token)
-    }
-    queryObserversQueue.sync {
-      queryObservers.removeValue(forKey: key)
+  /// Releases a metadata query session after observers have been removed and
+  /// the query has been stopped.
+  private func releaseMetadataQuerySession(
+    _ session: MetadataQuerySession
+  ) {
+    metadataQuerySessionsQueue.sync {
+      metadataQuerySessions.removeValue(forKey: session.id)
     }
   }
   
