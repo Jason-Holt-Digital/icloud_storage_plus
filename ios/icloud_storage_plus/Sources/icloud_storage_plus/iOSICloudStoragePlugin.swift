@@ -102,6 +102,28 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
     result(status)
   }
 
+  private func resolveContainerURL(
+    containerId: String,
+    operation: String,
+    relativePath: String? = nil,
+    result: @escaping FlutterResult,
+    onResolved: @escaping (URL) -> Void
+  ) {
+    Task { @MainActor [self] in
+      guard let containerURL = await ubiquityContainerResolver.resolve(
+        containerId: containerId
+      ) else {
+        result(containerAccessError(
+          operation: operation,
+          relativePath: relativePath
+        ))
+        return
+      }
+
+      onResolved(containerURL)
+    }
+  }
+
   /// Returns the filesystem path for the iCloud container.
   private func getContainerPath(_ call: FlutterMethodCall, _ result: @escaping FlutterResult){
     guard let args = call.arguments as? Dictionary<String, Any>,
@@ -110,14 +132,14 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
       result(argumentError)
       return
     }
-    
-    guard let containerURL = FileManager.default.url(
-      forUbiquityContainerIdentifier: containerId
-    ) else {
-      result(containerAccessError(operation: "getContainerPath"))
-      return
+
+    resolveContainerURL(
+      containerId: containerId,
+      operation: "getContainerPath",
+      result: result
+    ) { containerURL in
+      result(containerURL.path)
     }
-    result(containerURL.path)
   }
   
   /// Lists all items in the container using NSMetadataQuery.
@@ -536,85 +558,19 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
       return
     }
     
-    guard let containerURL = FileManager.default.url(forUbiquityContainerIdentifier: containerId)
-    else {
-      result(containerAccessError(operation: "downloadFile", relativePath: cloudRelativePath))
-      return
-    }
-    DebugHelper.log("containerURL: \(containerURL.path)")
-    
-    let cloudFileURL = containerURL.appendingPathComponent(cloudRelativePath)
-    let localFileURL = URL(fileURLWithPath: localFilePath)
-    do {
-      try FileManager.default.startDownloadingUbiquitousItem(at: cloudFileURL)
-    } catch {
-      let mapped = mapFileNotFoundError(
-        error,
-        operation: "downloadFile",
-        relativePath: cloudRelativePath
-      ) ?? nativeCodeError(
-        error,
-        operation: "downloadFile",
-        relativePath: cloudRelativePath
-      )
-      result(mapped)
-      return
-    }
-    
-    let completionGate = CompletionGate()
-    let completeOnce: (Any?) -> Void = { value in
-      guard completionGate.tryComplete() else {
-        return
-      }
-      result(value)
-    }
+    resolveContainerURL(
+      containerId: containerId,
+      operation: "downloadFile",
+      relativePath: cloudRelativePath,
+      result: result
+    ) { [self] containerURL in
+      DebugHelper.log("containerURL: \(containerURL.path)")
 
-    let query: NSMetadataQuery? = eventChannelName.isEmpty
-      ? nil
-      : {
-          let query = NSMetadataQuery()
-          query.operationQueue = .main
-          query.searchScopes = querySearchScopes
-          query.predicate = NSPredicate(
-            format: "%K == %@",
-            NSMetadataItemPathKey,
-            cloudFileURL.path
-          )
-          return query
-        }()
-
-    let downloadStreamHandler = registeredStreamHandler(for: eventChannelName)
-    downloadStreamHandler?.onCancelHandler = { [self] in
-      if let query {
-        removeObservers(query)
-        query.stop()
-      }
-      removeStreamHandler(eventChannelName)
-      completeOnce(
-        FlutterError(
-          code: "E_CANCEL",
-          message: "Download canceled",
-          details: nil
-        )
-      )
-    }
-
-    if let query {
-      addDownloadObservers(
-        query: query,
-        eventChannelName: eventChannelName
-      )
-      query.start()
-    }
-    if downloadStreamHandler != nil {
-      emitProgress(10.0, eventChannelName: eventChannelName)
-    }
-
-    readDocumentAt(url: cloudFileURL, destinationURL: localFileURL) { [self] error in
-      if completionGate.isCompleted {
-        return
-      }
-      if let error = error {
+      let cloudFileURL = containerURL.appendingPathComponent(cloudRelativePath)
+      let localFileURL = URL(fileURLWithPath: localFilePath)
+      do {
+        try FileManager.default.startDownloadingUbiquitousItem(at: cloudFileURL)
+      } catch {
         let mapped = mapFileNotFoundError(
           error,
           operation: "downloadFile",
@@ -624,25 +580,94 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
           operation: "downloadFile",
           relativePath: cloudRelativePath
         )
-        downloadStreamHandler?.setEvent(mapped)
+        result(mapped)
+        return
+      }
+
+      let completionGate = CompletionGate()
+      let completeOnce: (Any?) -> Void = { value in
+        guard completionGate.tryComplete() else {
+          return
+        }
+        result(value)
+      }
+
+      let query: NSMetadataQuery? = eventChannelName.isEmpty
+        ? nil
+        : {
+            let query = NSMetadataQuery()
+            query.operationQueue = .main
+            query.searchScopes = querySearchScopes
+            query.predicate = NSPredicate(
+              format: "%K == %@",
+              NSMetadataItemPathKey,
+              cloudFileURL.path
+            )
+            return query
+          }()
+
+      let downloadStreamHandler = registeredStreamHandler(for: eventChannelName)
+      downloadStreamHandler?.onCancelHandler = { [self] in
+        if let query {
+          removeObservers(query)
+          query.stop()
+        }
+        removeStreamHandler(eventChannelName)
+        completeOnce(
+          FlutterError(
+            code: "E_CANCEL",
+            message: "Download canceled",
+            details: nil
+          )
+        )
+      }
+
+      if let query {
+        addDownloadObservers(
+          query: query,
+          eventChannelName: eventChannelName
+        )
+        query.start()
+      }
+      if downloadStreamHandler != nil {
+        emitProgress(10.0, eventChannelName: eventChannelName)
+      }
+
+      readDocumentAt(url: cloudFileURL, destinationURL: localFileURL) {
+        [self] error in
+        if completionGate.isCompleted {
+          return
+        }
+        if let error = error {
+          let mapped = mapFileNotFoundError(
+            error,
+            operation: "downloadFile",
+            relativePath: cloudRelativePath
+          ) ?? nativeCodeError(
+            error,
+            operation: "downloadFile",
+            relativePath: cloudRelativePath
+          )
+          downloadStreamHandler?.setEvent(mapped)
+          downloadStreamHandler?.setEvent(FlutterEndOfEventStream)
+          if let query {
+            removeObservers(query)
+            query.stop()
+          }
+          removeStreamHandler(eventChannelName)
+          completeOnce(mapped)
+          return
+        }
+
+        emitProgress(100.0, eventChannelName: eventChannelName)
         downloadStreamHandler?.setEvent(FlutterEndOfEventStream)
         if let query {
           removeObservers(query)
           query.stop()
         }
         removeStreamHandler(eventChannelName)
-        completeOnce(mapped)
-        return
+        completeOnce(nil)
       }
-
-      emitProgress(100.0, eventChannelName: eventChannelName)
-      downloadStreamHandler?.setEvent(FlutterEndOfEventStream)
-      if let query {
-        removeObservers(query)
-        query.stop()
-      }
-      removeStreamHandler(eventChannelName)
-      completeOnce(nil)
     }
   }
 
@@ -661,71 +686,71 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
     let retryBackoff = (args["retryBackoffSeconds"] as? [NSNumber])?
       .map { $0.doubleValue } ?? []
 
-    guard let containerURL = FileManager.default.url(
-      forUbiquityContainerIdentifier: containerId
-    ) else {
-      result(containerAccessError(operation: "readInPlace", relativePath: relativePath))
-      return
-    }
+    resolveContainerURL(
+      containerId: containerId,
+      operation: "readInPlace",
+      relativePath: relativePath,
+      result: result
+    ) { [self] containerURL in
+      let fileURL = containerURL.appendingPathComponent(relativePath)
 
-    let fileURL = containerURL.appendingPathComponent(relativePath)
-
-    do {
-      try FileManager.default.startDownloadingUbiquitousItem(at: fileURL)
-    } catch {
-      let mapped = mapFileNotFoundError(
-        error,
-        operation: "readInPlace",
-        relativePath: relativePath
-      ) ?? nativeCodeError(
-        error,
-        operation: "readInPlace",
-        relativePath: relativePath
-      )
-      result(mapped)
-      return
-    }
-
-    Task { @MainActor [self] in
       do {
-        try await waitForDownloadCompletion(
-          at: fileURL,
-          idleTimeouts: idleTimeouts,
-          retryBackoff: retryBackoff
-        )
+        try FileManager.default.startDownloadingUbiquitousItem(at: fileURL)
       } catch {
-        if let timeoutError = mapTimeoutError(
+        let mapped = mapFileNotFoundError(
           error,
           operation: "readInPlace",
           relativePath: relativePath
-        ) {
-          result(timeoutError)
-          return
-        }
-        result(nativeCodeError(
+        ) ?? nativeCodeError(
           error,
           operation: "readInPlace",
           relativePath: relativePath
-        ))
+        )
+        result(mapped)
         return
       }
 
-      readInPlaceDocument(at: fileURL) { [self] contents, error in
-        if let error = error {
-          let mapped = mapFileNotFoundError(
-            error,
-            operation: "readInPlace",
-            relativePath: relativePath
-          ) ?? nativeCodeError(
-            error,
-            operation: "readInPlace",
-            relativePath: relativePath
+      Task { @MainActor [self] in
+        do {
+          try await waitForDownloadCompletion(
+            at: fileURL,
+            idleTimeouts: idleTimeouts,
+            retryBackoff: retryBackoff
           )
-          result(mapped)
+        } catch {
+          if let timeoutError = mapTimeoutError(
+            error,
+            operation: "readInPlace",
+            relativePath: relativePath
+          ) {
+            result(timeoutError)
+            return
+          }
+          result(nativeCodeError(
+            error,
+            operation: "readInPlace",
+            relativePath: relativePath
+          ))
           return
         }
 
-        result(contents)
+        readInPlaceDocument(at: fileURL) { [self] contents, error in
+          if let error = error {
+            let mapped = mapFileNotFoundError(
+              error,
+              operation: "readInPlace",
+              relativePath: relativePath
+            ) ?? nativeCodeError(
+              error,
+              operation: "readInPlace",
+              relativePath: relativePath
+            )
+            result(mapped)
+            return
+          }
+
+          result(contents)
+        }
       }
     }
   }
@@ -795,73 +820,74 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
     let retryBackoff = (args["retryBackoffSeconds"] as? [NSNumber])?
       .map { $0.doubleValue } ?? []
 
-    guard let containerURL = FileManager.default.url(forUbiquityContainerIdentifier: containerId)
-    else {
-      result(containerAccessError(operation: "readInPlaceBytes", relativePath: relativePath))
-      return
-    }
+    resolveContainerURL(
+      containerId: containerId,
+      operation: "readInPlaceBytes",
+      relativePath: relativePath,
+      result: result
+    ) { [self] containerURL in
+      let fileURL = containerURL.appendingPathComponent(relativePath)
 
-    let fileURL = containerURL.appendingPathComponent(relativePath)
-
-    do {
-      try FileManager.default.startDownloadingUbiquitousItem(at: fileURL)
-    } catch {
-      let mapped = mapFileNotFoundError(
-        error,
-        operation: "readInPlaceBytes",
-        relativePath: relativePath
-      ) ?? nativeCodeError(
-        error,
-        operation: "readInPlaceBytes",
-        relativePath: relativePath
-      )
-      result(mapped)
-      return
-    }
-
-    Task { @MainActor [self] in
       do {
-        try await waitForDownloadCompletion(
-          at: fileURL,
-          idleTimeouts: idleTimeouts,
-          retryBackoff: retryBackoff
-        )
+        try FileManager.default.startDownloadingUbiquitousItem(at: fileURL)
       } catch {
-        if let timeoutError = mapTimeoutError(
+        let mapped = mapFileNotFoundError(
           error,
           operation: "readInPlaceBytes",
           relativePath: relativePath
-        ) {
-          result(timeoutError)
-          return
-        }
-        result(nativeCodeError(
+        ) ?? nativeCodeError(
           error,
           operation: "readInPlaceBytes",
           relativePath: relativePath
-        ))
+        )
+        result(mapped)
         return
       }
 
-      readInPlaceBinaryDocument(at: fileURL) { [self] contents, error in
-        if let error = error {
-          let mapped = mapFileNotFoundError(
-            error,
-            operation: "readInPlaceBytes",
-            relativePath: relativePath
-          ) ?? nativeCodeError(
-            error,
-            operation: "readInPlaceBytes",
-            relativePath: relativePath
+      Task { @MainActor [self] in
+        do {
+          try await waitForDownloadCompletion(
+            at: fileURL,
+            idleTimeouts: idleTimeouts,
+            retryBackoff: retryBackoff
           )
-          result(mapped)
+        } catch {
+          if let timeoutError = mapTimeoutError(
+            error,
+            operation: "readInPlaceBytes",
+            relativePath: relativePath
+          ) {
+            result(timeoutError)
+            return
+          }
+          result(nativeCodeError(
+            error,
+            operation: "readInPlaceBytes",
+            relativePath: relativePath
+          ))
           return
         }
 
-        if let contents {
-          result(FlutterStandardTypedData(bytes: contents))
-        } else {
-          result(nil)
+        readInPlaceBinaryDocument(at: fileURL) { [self] contents, error in
+          if let error = error {
+            let mapped = mapFileNotFoundError(
+              error,
+              operation: "readInPlaceBytes",
+              relativePath: relativePath
+            ) ?? nativeCodeError(
+              error,
+              operation: "readInPlaceBytes",
+              relativePath: relativePath
+            )
+            result(mapped)
+            return
+          }
+
+          if let contents {
+            result(FlutterStandardTypedData(bytes: contents))
+          } else {
+            result(nil)
+          }
         }
       }
     }
@@ -968,14 +994,15 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
       return
     }
     
-    guard let containerURL = FileManager.default.url(forUbiquityContainerIdentifier: containerId)
-    else {
-      result(containerAccessError(operation: "documentExists", relativePath: relativePath))
-      return
+    resolveContainerURL(
+      containerId: containerId,
+      operation: "documentExists",
+      relativePath: relativePath,
+      result: result
+    ) { containerURL in
+      let fileURL = containerURL.appendingPathComponent(relativePath)
+      result(FileManager.default.fileExists(atPath: fileURL.path))
     }
-
-    let fileURL = containerURL.appendingPathComponent(relativePath)
-    result(FileManager.default.fileExists(atPath: fileURL.path))
   }
   
   /// Get file or directory metadata without downloading content.
@@ -989,38 +1016,43 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
       return
     }
     
-    guard let containerURL = FileManager.default.url(forUbiquityContainerIdentifier: containerId)
-    else {
-      result(containerAccessError(operation: "getDocumentMetadata", relativePath: relativePath))
-      return
-    }
+    resolveContainerURL(
+      containerId: containerId,
+      operation: "getDocumentMetadata",
+      relativePath: relativePath,
+      result: result
+    ) { [self] containerURL in
+      let fileURL = containerURL.appendingPathComponent(relativePath)
+      guard FileManager.default.fileExists(atPath: fileURL.path) else {
+        result(nil)
+        return
+      }
 
-    let fileURL = containerURL.appendingPathComponent(relativePath)
-    guard FileManager.default.fileExists(atPath: fileURL.path) else {
-      result(nil)
-      return
-    }
-
-    do {
-      let values = try fileURL.resourceValues(forKeys: [
-        .isDirectoryKey,
-        .fileSizeKey,
-        .creationDateKey,
-        .contentModificationDateKey,
-        .ubiquitousItemDownloadingStatusKey,
-        .ubiquitousItemIsDownloadingKey,
-        .ubiquitousItemIsUploadedKey,
-        .ubiquitousItemIsUploadingKey,
-        .ubiquitousItemHasUnresolvedConflictsKey,
-      ])
-      let containerPath = containerURL.standardizedFileURL.path
-      result(mapResourceValues(
-        fileURL: fileURL,
-        values: values,
-        containerPath: containerPath
-      ))
-    } catch {
-      result(nativeCodeError(error, operation: "getDocumentMetadata", relativePath: relativePath))
+      do {
+        let values = try fileURL.resourceValues(forKeys: [
+          .isDirectoryKey,
+          .fileSizeKey,
+          .creationDateKey,
+          .contentModificationDateKey,
+          .ubiquitousItemDownloadingStatusKey,
+          .ubiquitousItemIsDownloadingKey,
+          .ubiquitousItemIsUploadedKey,
+          .ubiquitousItemIsUploadingKey,
+          .ubiquitousItemHasUnresolvedConflictsKey,
+        ])
+        let containerPath = containerURL.standardizedFileURL.path
+        result(mapResourceValues(
+          fileURL: fileURL,
+          values: values,
+          containerPath: containerPath
+        ))
+      } catch {
+        result(nativeCodeError(
+          error,
+          operation: "getDocumentMetadata",
+          relativePath: relativePath
+        ))
+      }
     }
   }
 
@@ -1038,50 +1070,47 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
       return
     }
 
-    guard let containerURL = FileManager.default.url(
-      forUbiquityContainerIdentifier: containerId
-    ) else {
-      result(containerAccessError(
-        operation: "getItemMetadata",
-        relativePath: relativePath
-      ))
-      return
-    }
+    resolveContainerURL(
+      containerId: containerId,
+      operation: "getItemMetadata",
+      relativePath: relativePath,
+      result: result
+    ) { [self] containerURL in
+      let fileURL = containerURL.appendingPathComponent(relativePath)
+      guard FileManager.default.fileExists(atPath: fileURL.path) else {
+        result(nil)
+        return
+      }
 
-    let fileURL = containerURL.appendingPathComponent(relativePath)
-    guard FileManager.default.fileExists(atPath: fileURL.path) else {
-      result(nil)
-      return
-    }
-
-    do {
-      let values = try fileURL.resourceValues(forKeys: [
-        .isDirectoryKey,
-        .fileSizeKey,
-        .creationDateKey,
-        .contentModificationDateKey,
-        .ubiquitousItemDownloadingStatusKey,
-        .ubiquitousItemIsDownloadingKey,
-        .ubiquitousItemIsUploadedKey,
-        .ubiquitousItemIsUploadingKey,
-        .ubiquitousItemHasUnresolvedConflictsKey,
-      ])
-      let containerPath = containerURL.standardizedFileURL.path
-      var metadata = mapResourceValues(
-        fileURL: fileURL,
-        values: values,
-        containerPath: containerPath
-      )
-      metadata["downloadStatus"] = normalizeDownloadStatus(
-        values.ubiquitousItemDownloadingStatus
-      ) ?? values.ubiquitousItemDownloadingStatus?.rawValue
-      result(metadata)
-    } catch {
-      result(nativeCodeError(
-        error,
-        operation: "getItemMetadata",
-        relativePath: relativePath
-      ))
+      do {
+        let values = try fileURL.resourceValues(forKeys: [
+          .isDirectoryKey,
+          .fileSizeKey,
+          .creationDateKey,
+          .contentModificationDateKey,
+          .ubiquitousItemDownloadingStatusKey,
+          .ubiquitousItemIsDownloadingKey,
+          .ubiquitousItemIsUploadedKey,
+          .ubiquitousItemIsUploadingKey,
+          .ubiquitousItemHasUnresolvedConflictsKey,
+        ])
+        let containerPath = containerURL.standardizedFileURL.path
+        var metadata = mapResourceValues(
+          fileURL: fileURL,
+          values: values,
+          containerPath: containerPath
+        )
+        metadata["downloadStatus"] = normalizeDownloadStatus(
+          values.ubiquitousItemDownloadingStatus
+        ) ?? values.ubiquitousItemDownloadingStatus?.rawValue
+        result(metadata)
+      } catch {
+        result(nativeCodeError(
+          error,
+          operation: "getItemMetadata",
+          relativePath: relativePath
+        ))
+      }
     }
   }
 
@@ -1104,87 +1133,87 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
 
     let subdir = args["relativePath"] as? String
 
-    guard let containerURL = FileManager.default
-      .url(forUbiquityContainerIdentifier: containerId)
-    else {
-      result(containerAccessError(operation: "listContents", relativePath: subdir))
-      return
-    }
+    resolveContainerURL(
+      containerId: containerId,
+      operation: "listContents",
+      relativePath: subdir,
+      result: result
+    ) { [self] containerURL in
+      let listURL = subdir != nil
+        ? containerURL.appendingPathComponent(subdir!)
+        : containerURL
 
-    let listURL = subdir != nil
-      ? containerURL.appendingPathComponent(subdir!)
-      : containerURL
+      let keys: [URLResourceKey] = [
+        .isDirectoryKey,
+        .ubiquitousItemDownloadingStatusKey,
+        .ubiquitousItemIsDownloadingKey,
+        .ubiquitousItemIsUploadedKey,
+        .ubiquitousItemIsUploadingKey,
+        .ubiquitousItemHasUnresolvedConflictsKey,
+      ]
 
-    let keys: [URLResourceKey] = [
-      .isDirectoryKey,
-      .ubiquitousItemDownloadingStatusKey,
-      .ubiquitousItemIsDownloadingKey,
-      .ubiquitousItemIsUploadedKey,
-      .ubiquitousItemIsUploadingKey,
-      .ubiquitousItemHasUnresolvedConflictsKey,
-    ]
-
-    DispatchQueue.global(qos: .userInitiated).async {
-      do {
-        let contents = try FileManager.default.contentsOfDirectory(
-          at: listURL,
-          includingPropertiesForKeys: keys,
-          // Do NOT use .skipsHiddenFiles — iCloud placeholders
-          // have a leading dot and would be filtered out.
-          options: []
-        )
-
-        let containerPath = containerURL.standardizedFileURL.path
-        let keysSet = Set(keys)
-        let parentRelative = self.relativePath(
-          for: listURL, containerPath: containerPath
-        )
-        var items: [[String: Any?]] = []
-
-        for fileURL in contents {
-          let diskName = fileURL.lastPathComponent
-          let resolvedName = self.resolveICloudPlaceholderName(diskName)
-
-          // Skip system hidden files (.DS_Store, .Trash, etc.).
-          // Placeholder files (.foo.icloud) have already been resolved
-          // to their real name, so they pass through this filter.
-          if resolvedName.hasPrefix(".") { continue }
-
-          let values = try fileURL.resourceValues(
-            forKeys: keysSet
+      DispatchQueue.global(qos: .userInitiated).async {
+        do {
+          let contents = try FileManager.default.contentsOfDirectory(
+            at: listURL,
+            includingPropertiesForKeys: keys,
+            // Do NOT use .skipsHiddenFiles — iCloud placeholders
+            // have a leading dot and would be filtered out.
+            options: []
           )
 
-          // Build relative path from the container root so the
-          // result is usable with other plugin methods.
-          let itemRelativePath = parentRelative.isEmpty
-            ? resolvedName
-            : parentRelative + "/" + resolvedName
+          let containerPath = containerURL.standardizedFileURL.path
+          let keysSet = Set(keys)
+          let parentRelative = self.relativePath(
+            for: listURL, containerPath: containerPath
+          )
+          var items: [[String: Any?]] = []
 
-          items.append([
-            "relativePath": itemRelativePath,
-            "isDirectory": values.isDirectory ?? false,
-            "downloadStatus": self.normalizeDownloadStatus(
-              values.ubiquitousItemDownloadingStatus
-            ),
-            "isDownloading":
-              values.ubiquitousItemIsDownloading ?? false,
-            "isUploaded":
-              values.ubiquitousItemIsUploaded ?? false,
-            "isUploading":
-              values.ubiquitousItemIsUploading ?? false,
-            "hasUnresolvedConflicts":
-              values.ubiquitousItemHasUnresolvedConflicts ?? false,
-          ])
-        }
+          for fileURL in contents {
+            let diskName = fileURL.lastPathComponent
+            let resolvedName = self.resolveICloudPlaceholderName(diskName)
 
-        DispatchQueue.main.async { result(items) }
-      } catch {
-        DispatchQueue.main.async {
-          result(self.nativeCodeError(
-            error,
-            operation: "listContents",
-            relativePath: subdir
-          ))
+            // Skip system hidden files (.DS_Store, .Trash, etc.).
+            // Placeholder files (.foo.icloud) have already been resolved
+            // to their real name, so they pass through this filter.
+            if resolvedName.hasPrefix(".") { continue }
+
+            let values = try fileURL.resourceValues(
+              forKeys: keysSet
+            )
+
+            // Build relative path from the container root so the
+            // result is usable with other plugin methods.
+            let itemRelativePath = parentRelative.isEmpty
+              ? resolvedName
+              : parentRelative + "/" + resolvedName
+
+            items.append([
+              "relativePath": itemRelativePath,
+              "isDirectory": values.isDirectory ?? false,
+              "downloadStatus": self.normalizeDownloadStatus(
+                values.ubiquitousItemDownloadingStatus
+              ),
+              "isDownloading":
+                values.ubiquitousItemIsDownloading ?? false,
+              "isUploaded":
+                values.ubiquitousItemIsUploaded ?? false,
+              "isUploading":
+                values.ubiquitousItemIsUploading ?? false,
+              "hasUnresolvedConflicts":
+                values.ubiquitousItemHasUnresolvedConflicts ?? false,
+            ])
+          }
+
+          DispatchQueue.main.async { result(items) }
+        } catch {
+          DispatchQueue.main.async {
+            result(self.nativeCodeError(
+              error,
+              operation: "listContents",
+              relativePath: subdir
+            ))
+          }
         }
       }
     }
@@ -1243,40 +1272,42 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
       return
     }
     
-    guard let containerURL = FileManager.default.url(forUbiquityContainerIdentifier: containerId)
-    else {
-      result(containerAccessError(operation: "delete", relativePath: relativePath))
-      return
-    }
-    DebugHelper.log("containerURL: \(containerURL.path)")
+    resolveContainerURL(
+      containerId: containerId,
+      operation: "delete",
+      relativePath: relativePath,
+      result: result
+    ) { [self] containerURL in
+      DebugHelper.log("containerURL: \(containerURL.path)")
 
-    let fileURL = containerURL.appendingPathComponent(relativePath)
-    guard FileManager.default.fileExists(atPath: fileURL.path) else {
-      result(itemNotFoundError(operation: "delete", relativePath: relativePath))
-      return
-    }
+      let fileURL = containerURL.appendingPathComponent(relativePath)
+      guard FileManager.default.fileExists(atPath: fileURL.path) else {
+        result(itemNotFoundError(operation: "delete", relativePath: relativePath))
+        return
+      }
 
-    let fileCoordinator = NSFileCoordinator(filePresenter: nil)
-    fileCoordinator.coordinate(
-      writingItemAt: fileURL,
-      options: NSFileCoordinator.WritingOptions.forDeleting,
-      error: nil
-    ) { writingURL in
-      do {
-        try FileManager.default.removeItem(at: writingURL)
-        result(nil)
-      } catch {
-        DebugHelper.log("error: \(error.localizedDescription)")
-        let mapped = mapFileNotFoundError(
-          error,
-          operation: "delete",
-          relativePath: relativePath
-        ) ?? nativeCodeError(
-          error,
-          operation: "delete",
-          relativePath: relativePath
-        )
-        result(mapped)
+      let fileCoordinator = NSFileCoordinator(filePresenter: nil)
+      fileCoordinator.coordinate(
+        writingItemAt: fileURL,
+        options: NSFileCoordinator.WritingOptions.forDeleting,
+        error: nil
+      ) { writingURL in
+        do {
+          try FileManager.default.removeItem(at: writingURL)
+          result(nil)
+        } catch {
+          DebugHelper.log("error: \(error.localizedDescription)")
+          let mapped = mapFileNotFoundError(
+            error,
+            operation: "delete",
+            relativePath: relativePath
+          ) ?? nativeCodeError(
+            error,
+            operation: "delete",
+            relativePath: relativePath
+          )
+          result(mapped)
+        }
       }
     }
   }
@@ -1292,46 +1323,48 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
       return
     }
     
-    guard let containerURL = FileManager.default.url(forUbiquityContainerIdentifier: containerId)
-    else {
-      result(containerAccessError(operation: "move", relativePath: atRelativePath))
-      return
-    }
-    DebugHelper.log("containerURL: \(containerURL.path)")
+    resolveContainerURL(
+      containerId: containerId,
+      operation: "move",
+      relativePath: atRelativePath,
+      result: result
+    ) { [self] containerURL in
+      DebugHelper.log("containerURL: \(containerURL.path)")
 
-    let atURL = containerURL.appendingPathComponent(atRelativePath)
-    guard FileManager.default.fileExists(atPath: atURL.path) else {
-      result(itemNotFoundError(operation: "move", relativePath: atRelativePath))
-      return
-    }
+      let atURL = containerURL.appendingPathComponent(atRelativePath)
+      guard FileManager.default.fileExists(atPath: atURL.path) else {
+        result(itemNotFoundError(operation: "move", relativePath: atRelativePath))
+        return
+      }
 
-    let toURL = containerURL.appendingPathComponent(toRelativePath)
-    let fileCoordinator = NSFileCoordinator(filePresenter: nil)
-    fileCoordinator.coordinate(
-      writingItemAt: atURL,
-      options: NSFileCoordinator.WritingOptions.forMoving,
-      writingItemAt: toURL,
-      options: NSFileCoordinator.WritingOptions.forReplacing,
-      error: nil
-    ) { atWritingURL, toWritingURL in
-      do {
-        let toDirURL = toWritingURL.deletingLastPathComponent()
-        if !FileManager.default.fileExists(atPath: toDirURL.path) {
-          try FileManager.default.createDirectory(
-            at: toDirURL,
-            withIntermediateDirectories: true,
-            attributes: nil
-          )
+      let toURL = containerURL.appendingPathComponent(toRelativePath)
+      let fileCoordinator = NSFileCoordinator(filePresenter: nil)
+      fileCoordinator.coordinate(
+        writingItemAt: atURL,
+        options: NSFileCoordinator.WritingOptions.forMoving,
+        writingItemAt: toURL,
+        options: NSFileCoordinator.WritingOptions.forReplacing,
+        error: nil
+      ) { atWritingURL, toWritingURL in
+        do {
+          let toDirURL = toWritingURL.deletingLastPathComponent()
+          if !FileManager.default.fileExists(atPath: toDirURL.path) {
+            try FileManager.default.createDirectory(
+              at: toDirURL,
+              withIntermediateDirectories: true,
+              attributes: nil
+            )
+          }
+          try FileManager.default.moveItem(at: atWritingURL, to: toWritingURL)
+          result(nil)
+        } catch {
+          DebugHelper.log("error: \(error.localizedDescription)")
+          result(nativeCodeError(
+            error,
+            operation: "move",
+            relativePath: atRelativePath
+          ))
         }
-        try FileManager.default.moveItem(at: atWritingURL, to: toWritingURL)
-        result(nil)
-      } catch {
-        DebugHelper.log("error: \(error.localizedDescription)")
-        result(nativeCodeError(
-          error,
-          operation: "move",
-          relativePath: atRelativePath
-        ))
       }
     }
   }
@@ -1347,110 +1380,112 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
       return
     }
     
-    guard let containerURL = FileManager.default.url(forUbiquityContainerIdentifier: containerId)
-    else {
-      result(containerAccessError(operation: "copy", relativePath: fromRelativePath))
-      return
-    }
-    DebugHelper.log("containerURL: \(containerURL.path)")
-    
-    let fromURL = containerURL.appendingPathComponent(fromRelativePath)
-    guard FileManager.default.fileExists(atPath: fromURL.path) else {
-      result(itemNotFoundError(operation: "copy", relativePath: fromRelativePath))
-      return
-    }
+    resolveContainerURL(
+      containerId: containerId,
+      operation: "copy",
+      relativePath: fromRelativePath,
+      result: result
+    ) { [self] containerURL in
+      DebugHelper.log("containerURL: \(containerURL.path)")
 
-    let toURL = containerURL.appendingPathComponent(toRelativePath)
-    let fileCoordinator = NSFileCoordinator(filePresenter: nil)
-    var handledExistingDestination = false
-    var overwriteError: Error?
-    var sourceCoordinationError: NSError?
-
-    fileCoordinator.coordinate(
-      readingItemAt: fromURL,
-      options: .withoutChanges,
-      error: &sourceCoordinationError
-    ) { fromReadingURL in
-      do {
-        handledExistingDestination = try copyOverwritingExistingItem(
-          from: fromReadingURL,
-          to: toURL
-        )
-      } catch {
-        overwriteError = error
+      let fromURL = containerURL.appendingPathComponent(fromRelativePath)
+      guard FileManager.default.fileExists(atPath: fromURL.path) else {
+        result(itemNotFoundError(operation: "copy", relativePath: fromRelativePath))
+        return
       }
-    }
 
-    if let sourceCoordinationError {
-      DebugHelper.log("copy source coordination error: \(sourceCoordinationError.localizedDescription)")
-      result(nativeCodeError(
-        sourceCoordinationError,
-        operation: "copy",
-        relativePath: fromRelativePath
-      ))
-      return
-    }
+      let toURL = containerURL.appendingPathComponent(toRelativePath)
+      let fileCoordinator = NSFileCoordinator(filePresenter: nil)
+      var handledExistingDestination = false
+      var overwriteError: Error?
+      var sourceCoordinationError: NSError?
 
-    if let overwriteError {
-      DebugHelper.log("copy error: \(overwriteError.localizedDescription)")
-      result(nativeCodeError(
-        overwriteError,
-        operation: "copy",
-        relativePath: toRelativePath
-      ))
-      return
-    }
-
-    if handledExistingDestination {
-      result(nil)
-      return
-    }
-
-    // Use reading coordination for source and writing coordination for destination
-    var copyCoordinationError: NSError?
-    fileCoordinator.coordinate(
-      readingItemAt: fromURL,
-      options: .withoutChanges,
-      writingItemAt: toURL,
-      options: .forReplacing,
-      error: &copyCoordinationError
-    ) { fromReadingURL, toWritingURL in
-      do {
-        // Create destination directory if needed
-        let toDirURL = toWritingURL.deletingLastPathComponent()
-        if !FileManager.default.fileExists(atPath: toDirURL.path) {
-          try FileManager.default.createDirectory(
-            at: toDirURL,
-            withIntermediateDirectories: true,
-            attributes: nil
+      fileCoordinator.coordinate(
+        readingItemAt: fromURL,
+        options: .withoutChanges,
+        error: &sourceCoordinationError
+      ) { fromReadingURL in
+        do {
+          handledExistingDestination = try copyOverwritingExistingItem(
+            from: fromReadingURL,
+            to: toURL
           )
+        } catch {
+          overwriteError = error
         }
+      }
 
-        // Remove destination file if it exists
-        if FileManager.default.fileExists(atPath: toWritingURL.path) {
-          try FileManager.default.removeItem(at: toWritingURL)
-        }
-
-        // Copy the file
-        try FileManager.default.copyItem(at: fromReadingURL, to: toWritingURL)
-        result(nil)
-      } catch {
-        DebugHelper.log("copy error: \(error.localizedDescription)")
+      if let sourceCoordinationError {
+        DebugHelper.log("copy source coordination error: \(sourceCoordinationError.localizedDescription)")
         result(nativeCodeError(
-          error,
+          sourceCoordinationError,
+          operation: "copy",
+          relativePath: fromRelativePath
+        ))
+        return
+      }
+
+      if let overwriteError {
+        DebugHelper.log("copy error: \(overwriteError.localizedDescription)")
+        result(nativeCodeError(
+          overwriteError,
+          operation: "copy",
+          relativePath: toRelativePath
+        ))
+        return
+      }
+
+      if handledExistingDestination {
+        result(nil)
+        return
+      }
+
+      // Use reading coordination for source and writing coordination for destination
+      var copyCoordinationError: NSError?
+      fileCoordinator.coordinate(
+        readingItemAt: fromURL,
+        options: .withoutChanges,
+        writingItemAt: toURL,
+        options: .forReplacing,
+        error: &copyCoordinationError
+      ) { fromReadingURL, toWritingURL in
+        do {
+          // Create destination directory if needed
+          let toDirURL = toWritingURL.deletingLastPathComponent()
+          if !FileManager.default.fileExists(atPath: toDirURL.path) {
+            try FileManager.default.createDirectory(
+              at: toDirURL,
+              withIntermediateDirectories: true,
+              attributes: nil
+            )
+          }
+
+          // Remove destination file if it exists
+          if FileManager.default.fileExists(atPath: toWritingURL.path) {
+            try FileManager.default.removeItem(at: toWritingURL)
+          }
+
+          // Copy the file
+          try FileManager.default.copyItem(at: fromReadingURL, to: toWritingURL)
+          result(nil)
+        } catch {
+          DebugHelper.log("copy error: \(error.localizedDescription)")
+          result(nativeCodeError(
+            error,
+            operation: "copy",
+            relativePath: toRelativePath
+          ))
+        }
+      }
+
+      if let copyCoordinationError {
+        DebugHelper.log("copy coordination error: \(copyCoordinationError.localizedDescription)")
+        result(nativeCodeError(
+          copyCoordinationError,
           operation: "copy",
           relativePath: toRelativePath
         ))
       }
-    }
-
-    if let copyCoordinationError {
-      DebugHelper.log("copy coordination error: \(copyCoordinationError.localizedDescription)")
-      result(nativeCodeError(
-        copyCoordinationError,
-        operation: "copy",
-        relativePath: toRelativePath
-      ))
     }
   }
 

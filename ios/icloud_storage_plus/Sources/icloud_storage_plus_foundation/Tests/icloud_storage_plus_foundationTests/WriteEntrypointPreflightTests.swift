@@ -17,13 +17,18 @@ final class WriteEntrypointPreflightTests: XCTestCase {
 
         let preflight = WriteEntrypointPreflight(
             execute: WriteEntrypointPreflight.live.execute,
-            resolveContainerURL: { _ in
-                lock.lock()
-                observedMainThreadStates.append(Thread.isMainThread)
-                lock.unlock()
-                expectation.fulfill()
-                return temporaryDirectory
-            },
+            ubiquityContainerResolver: UbiquityContainerResolver(
+                execute: UbiquityContainerResolver.live.execute,
+                resolveContainerURL: { _ in
+                    lock.lock()
+                    observedMainThreadStates.append(Thread.isMainThread)
+                    lock.unlock()
+                    expectation.fulfill()
+                    return temporaryDirectory
+                },
+                delay: { _ in XCTFail("should not retry") },
+                retryDelay: UbiquityContainerResolver.maximumRetryDelay
+            ),
             createDirectory: { directoryURL in
                 lock.lock()
                 observedMainThreadStates.append(Thread.isMainThread)
@@ -50,7 +55,12 @@ final class WriteEntrypointPreflightTests: XCTestCase {
     func testPrepareThrowsTypedContainerUnavailableError() async {
         let preflight = WriteEntrypointPreflight(
             execute: { work in try work() },
-            resolveContainerURL: { _ in nil },
+            ubiquityContainerResolver: UbiquityContainerResolver(
+                execute: { work in work() },
+                resolveContainerURL: { _ in nil },
+                delay: { _ in },
+                retryDelay: UbiquityContainerResolver.maximumRetryDelay
+            ),
             createDirectory: { _ in XCTFail("should not create directory") }
         )
 
@@ -79,7 +89,12 @@ final class WriteEntrypointPreflightTests: XCTestCase {
         var createDirectoryCalled = false
         let preflight = WriteEntrypointPreflight(
             execute: { work in try work() },
-            resolveContainerURL: { _ in temporaryDirectory },
+            ubiquityContainerResolver: UbiquityContainerResolver(
+                execute: { work in work() },
+                resolveContainerURL: { _ in temporaryDirectory },
+                delay: { _ in XCTFail("should not retry") },
+                retryDelay: UbiquityContainerResolver.maximumRetryDelay
+            ),
             createDirectory: { _ in createDirectoryCalled = true }
         )
 
@@ -106,11 +121,16 @@ final class WriteEntrypointPreflightTests: XCTestCase {
         var observedMainThreadState: Bool?
         let preflight = WriteEntrypointPreflight(
             execute: WriteEntrypointPreflight.live.execute,
-            resolveContainerURL: { _ in
-                observedMainThreadState = Thread.isMainThread
-                expectation.fulfill()
-                return temporaryDirectory
-            },
+            ubiquityContainerResolver: UbiquityContainerResolver(
+                execute: UbiquityContainerResolver.live.execute,
+                resolveContainerURL: { _ in
+                    observedMainThreadState = Thread.isMainThread
+                    expectation.fulfill()
+                    return temporaryDirectory
+                },
+                delay: { _ in XCTFail("should not retry") },
+                retryDelay: UbiquityContainerResolver.maximumRetryDelay
+            ),
             createDirectory: { _ in XCTFail("should not create directory") }
         )
 
@@ -121,6 +141,51 @@ final class WriteEntrypointPreflightTests: XCTestCase {
         await fulfillment(of: [expectation], timeout: 1.0)
         XCTAssertEqual(containerURL.path, temporaryDirectory.path)
         XCTAssertEqual(observedMainThreadState, false)
+    }
+
+    func testPrepareSucceedsWhenInitialContainerLookupIsNil() async throws {
+        let temporaryDirectory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: temporaryDirectory) }
+
+        var attempts = 0
+        var delays: [TimeInterval] = []
+        var createdDirectory: URL?
+        let preflight = WriteEntrypointPreflight(
+            execute: { work in try work() },
+            ubiquityContainerResolver: UbiquityContainerResolver(
+                execute: { work in work() },
+                resolveContainerURL: { _ in
+                    attempts += 1
+                    return attempts == 2 ? temporaryDirectory : nil
+                },
+                delay: { delays.append($0) },
+                retryDelay: UbiquityContainerResolver.maximumRetryDelay
+            ),
+            createDirectory: { createdDirectory = $0 }
+        )
+
+        let fileURL = try await preflight.prepare(
+            containerId: "container",
+            relativePath: "nested/file.txt"
+        )
+
+        XCTAssertEqual(attempts, UbiquityContainerResolver.maxAttempts)
+        XCTAssertEqual(
+            delays,
+            [UbiquityContainerResolver.maximumRetryDelay]
+        )
+        XCTAssertEqual(
+            fileURL.path,
+            temporaryDirectory
+                .appendingPathComponent("nested/file.txt")
+                .path
+        )
+        XCTAssertEqual(
+            createdDirectory?.path,
+            temporaryDirectory
+                .appendingPathComponent("nested", isDirectory: true)
+                .path
+        )
     }
 
     private func makeTemporaryDirectory() throws -> URL {

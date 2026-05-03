@@ -902,6 +902,77 @@ void main() {
     },
   );
 
+  test('documentExists maps structured container access payloads', () async {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (methodCall) async {
+      if (methodCall.method == 'documentExists') {
+        throw PlatformException(
+          code: PlatformExceptionCode.iCloudConnectionOrPermission,
+          message: 'Container unavailable',
+          details: {
+            'category': 'containerAccess',
+            'operation': 'documentExists',
+            'retryable': false,
+            'relativePath': 'file',
+          },
+        );
+      }
+      return null;
+    });
+
+    await expectLater(
+      () => platform.documentExists(
+        containerId: containerId,
+        relativePath: 'file',
+      ),
+      throwsA(
+        isA<ICloudContainerAccessException>()
+            .having(
+              (error) => error.operation,
+              'operation',
+              'documentExists',
+            )
+            .having((error) => error.relativePath, 'relativePath', 'file'),
+      ),
+    );
+  });
+
+  test('writeInPlace maps structured container access payloads', () async {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (methodCall) async {
+      if (methodCall.method == 'writeInPlace') {
+        throw PlatformException(
+          code: PlatformExceptionCode.iCloudConnectionOrPermission,
+          message: 'Container unavailable',
+          details: {
+            'category': 'containerAccess',
+            'operation': 'writeInPlace',
+            'retryable': false,
+            'relativePath': 'file',
+          },
+        );
+      }
+      return null;
+    });
+
+    await expectLater(
+      () => platform.writeInPlace(
+        containerId: containerId,
+        relativePath: 'file',
+        contents: 'contents',
+      ),
+      throwsA(
+        isA<ICloudContainerAccessException>()
+            .having(
+              (error) => error.operation,
+              'operation',
+              'writeInPlace',
+            )
+            .having((error) => error.relativePath, 'relativePath', 'file'),
+      ),
+    );
+  });
+
   test(
     'legacy code only getContainerPath PlatformException is preserved',
     () async {

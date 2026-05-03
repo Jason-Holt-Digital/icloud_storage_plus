@@ -5,21 +5,20 @@ struct WriteEntrypointPreflight {
     typealias Execute = (
         @escaping @Sendable () throws -> URL
     ) async throws -> URL
-    typealias ResolveContainerURL = (String) -> URL?
     typealias CreateDirectory = (URL) throws -> Void
 
     let execute: Execute
-    let resolveContainerURL: ResolveContainerURL
+    let ubiquityContainerResolver: UbiquityContainerResolver
     let createDirectory: CreateDirectory
 
     func containerURL(containerId: String) async throws -> URL {
-        try await execute {
-            guard let containerURL = resolveContainerURL(containerId) else {
-                throw Self.containerUnavailableError()
-            }
-
-            return containerURL
+        guard let containerURL = await ubiquityContainerResolver.resolve(
+            containerId: containerId
+        ) else {
+            throw Self.containerUnavailableError()
         }
+
+        return containerURL
     }
 
     func itemURL(
@@ -41,11 +40,8 @@ struct WriteEntrypointPreflight {
         containerId: String,
         relativePath: String
     ) async throws -> URL {
-        try await execute {
-            guard let containerURL = resolveContainerURL(containerId) else {
-                throw Self.containerUnavailableError()
-            }
-
+        let containerURL = try await containerURL(containerId: containerId)
+        return try await execute {
             let fileURL = containerURL.appendingPathComponent(relativePath)
             try createDirectory(fileURL.deletingLastPathComponent())
             return fileURL
@@ -88,9 +84,7 @@ extension WriteEntrypointPreflight {
                 }
             }
         },
-        resolveContainerURL: {
-            FileManager.default.url(forUbiquityContainerIdentifier: $0)
-        },
+        ubiquityContainerResolver: .live,
         createDirectory: { directoryURL in
             try FileManager.default.createDirectory(
                 at: directoryURL,
