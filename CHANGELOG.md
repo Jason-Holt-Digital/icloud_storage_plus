@@ -14,6 +14,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `UbiquityContainerResolver`, including `gather`, so transient
   `FileManager.url(forUbiquityContainerIdentifier:)` nil responses retry
   before surfacing a container-access failure.
+- Container resolution retry delays now preserve `Task.sleep` cancellation
+  instead of swallowing it, so cancelled calls stop before issuing an
+  unnecessary second container lookup.
 - Native iOS and macOS metadata query sessions are retained for their full
   query lifetimes, preventing observers from being released before
   `NSMetadataQuery` completes.
