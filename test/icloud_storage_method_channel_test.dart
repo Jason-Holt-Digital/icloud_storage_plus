@@ -165,6 +165,35 @@ void main() {
       expect(eventChannelName, isNotNull);
       expect(eventChannelName, isNotEmpty);
     });
+
+    test('maps structured container access failures', () async {
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, (methodCall) async {
+        if (methodCall.method == 'gather') {
+          throw PlatformException(
+            code: PlatformExceptionCode.iCloudConnectionOrPermission,
+            message: 'Container unavailable',
+            details: {
+              'category': 'containerAccess',
+              'operation': 'gather',
+              'retryable': false,
+            },
+          );
+        }
+        return null;
+      });
+
+      await expectLater(
+        () => platform.gather(containerId: containerId),
+        throwsA(
+          isA<ICloudContainerAccessException>().having(
+            (error) => error.operation,
+            'operation',
+            'gather',
+          ),
+        ),
+      );
+    });
   });
 
   group('uploadFile tests:', () {
@@ -383,6 +412,56 @@ void main() {
         throwsA(isA<ICloudInvalidArgumentException>()),
       );
     });
+
+    test('writeInPlace preserves unknown native write enrichment', () async {
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, (methodCall) async {
+        if (methodCall.method == 'writeInPlace') {
+          throw PlatformException(
+            code: PlatformExceptionCode.nativeCodeError,
+            message: 'Native Code Error',
+            details: {
+              'category': 'unknownNative',
+              'operation': 'writeInPlace',
+              'retryable': false,
+              'relativePath': 'Documents/test.json',
+              'pathKind': 'temporaryReplacement',
+              'nativeDomain': 'NSCocoaErrorDomain',
+              'nativeCode': 640,
+              'nativeDescription': 'The volume is out of space.',
+            },
+          );
+        }
+        return null;
+      });
+
+      await expectLater(
+        () => platform.writeInPlace(
+          containerId: containerId,
+          relativePath: 'Documents/test.json',
+          contents: '{"ok":true}',
+        ),
+        throwsA(
+          isA<ICloudUnknownNativeException>()
+              .having(
+                (error) => error.operation,
+                'operation',
+                'writeInPlace',
+              )
+              .having(
+                (error) => error.pathKind,
+                'pathKind',
+                'temporaryReplacement',
+              )
+              .having(
+                (error) => error.nativeDomain,
+                'nativeDomain',
+                'NSCocoaErrorDomain',
+              )
+              .having((error) => error.nativeCode, 'nativeCode', 640),
+        ),
+      );
+    });
   });
 
   group('writeInPlaceBytes tests:', () {
@@ -423,6 +502,47 @@ void main() {
           contents: Uint8List.fromList([4, 5, 6]),
         ),
         throwsA(isA<ICloudTimeoutException>()),
+      );
+    });
+
+    test('writeInPlaceBytes maps structured coordination payloads', () async {
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, (methodCall) async {
+        if (methodCall.method == 'writeInPlaceBytes') {
+          throw PlatformException(
+            code: PlatformExceptionCode.coordination,
+            message: 'File coordination failed while replacing an iCloud item.',
+            details: {
+              'category': 'coordination',
+              'operation': 'writeInPlaceBytes',
+              'retryable': false,
+              'relativePath': 'Documents/data.bin',
+              'pathKind': 'destination',
+              'nativeDomain': 'ICloudStoragePlusErrorDomain',
+              'nativeCode': 5,
+              'nativeDescription':
+                  'File coordination failed while replacing an iCloud item.',
+            },
+          );
+        }
+        return null;
+      });
+
+      await expectLater(
+        () => platform.writeInPlaceBytes(
+          containerId: containerId,
+          relativePath: 'Documents/data.bin',
+          contents: Uint8List.fromList([4, 5, 6]),
+        ),
+        throwsA(
+          isA<ICloudCoordinationException>()
+              .having(
+                (error) => error.operation,
+                'operation',
+                'writeInPlaceBytes',
+              )
+              .having((error) => error.pathKind, 'pathKind', 'destination'),
+        ),
       );
     });
   });
@@ -872,6 +992,77 @@ void main() {
       );
     },
   );
+
+  test('documentExists maps structured container access payloads', () async {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (methodCall) async {
+      if (methodCall.method == 'documentExists') {
+        throw PlatformException(
+          code: PlatformExceptionCode.iCloudConnectionOrPermission,
+          message: 'Container unavailable',
+          details: {
+            'category': 'containerAccess',
+            'operation': 'documentExists',
+            'retryable': false,
+            'relativePath': 'file',
+          },
+        );
+      }
+      return null;
+    });
+
+    await expectLater(
+      () => platform.documentExists(
+        containerId: containerId,
+        relativePath: 'file',
+      ),
+      throwsA(
+        isA<ICloudContainerAccessException>()
+            .having(
+              (error) => error.operation,
+              'operation',
+              'documentExists',
+            )
+            .having((error) => error.relativePath, 'relativePath', 'file'),
+      ),
+    );
+  });
+
+  test('writeInPlace maps structured container access payloads', () async {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (methodCall) async {
+      if (methodCall.method == 'writeInPlace') {
+        throw PlatformException(
+          code: PlatformExceptionCode.iCloudConnectionOrPermission,
+          message: 'Container unavailable',
+          details: {
+            'category': 'containerAccess',
+            'operation': 'writeInPlace',
+            'retryable': false,
+            'relativePath': 'file',
+          },
+        );
+      }
+      return null;
+    });
+
+    await expectLater(
+      () => platform.writeInPlace(
+        containerId: containerId,
+        relativePath: 'file',
+        contents: 'contents',
+      ),
+      throwsA(
+        isA<ICloudContainerAccessException>()
+            .having(
+              (error) => error.operation,
+              'operation',
+              'writeInPlace',
+            )
+            .having((error) => error.relativePath, 'relativePath', 'file'),
+      ),
+    );
+  });
 
   test(
     'legacy code only getContainerPath PlatformException is preserved',

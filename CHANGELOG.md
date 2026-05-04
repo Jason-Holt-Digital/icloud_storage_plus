@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.1.3] - 2026-05-03
+
+### Fixed
+- iOS and macOS container operations now route through a shared
+  `UbiquityContainerResolver`, including `gather`, so transient
+  `FileManager.url(forUbiquityContainerIdentifier:)` nil responses retry
+  before surfacing a container-access failure.
+- Container resolution retry delays now preserve `Task.sleep` cancellation
+  instead of swallowing it, so cancelled calls stop before issuing an
+  unnecessary second container lookup.
+- Native iOS and macOS metadata query sessions are retained for their full
+  query lifetimes, preventing observers from being released before
+  `NSMetadataQuery` completes.
+- Native write failures now preserve structured path and native error context
+  for Dart typed exceptions without exposing full local filesystem paths.
+
 ## [2.1.2] - 2026-04-23
 
 ### Fixed

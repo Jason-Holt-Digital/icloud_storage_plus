@@ -10,9 +10,11 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
     label: "icloud_storage_plus.stream_state"
   )
   let querySearchScopes = iCloudMetadataQuerySearchScopes
-  private var queryObservers: [ObjectIdentifier: [NSObjectProtocol]] = [:]
-  private let queryObserversQueue = DispatchQueue(
-    label: "icloud_storage_plus.query_observers"
+  private var metadataQuerySessions: [
+    MetadataQuerySession.ID: MetadataQuerySession
+  ] = [:]
+  private let metadataQuerySessionsQueue = DispatchQueue(
+    label: "icloud_storage_plus.metadata_query_sessions"
   )
   private let metadataQueryOperationQueue: OperationQueue = {
     let queue = OperationQueue()
@@ -21,6 +23,24 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
     queue.qualityOfService = .userInitiated
     return queue
   }()
+  private let ubiquityContainerResolver: UbiquityContainerResolver
+
+  init(
+    ubiquityContainerResolver: UbiquityContainerResolver = .live
+  ) {
+    self.ubiquityContainerResolver = ubiquityContainerResolver
+    super.init()
+  }
+
+  deinit {
+    let sessions = metadataQuerySessionsQueue.sync {
+      Array(metadataQuerySessions.values)
+    }
+    for session in sessions {
+      session.cancel()
+    }
+  }
+
   /// Registers the plugin with the Flutter registrar.
   public static func register(with registrar: FlutterPluginRegistrar) {
     let channel = FlutterMethodChannel(name: "icloud_storage_plus", binaryMessenger: registrar.messenger)
@@ -80,6 +100,28 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
     result(status)
   }
 
+  private func resolveContainerURL(
+    containerId: String,
+    operation: String,
+    relativePath: String? = nil,
+    result: @escaping FlutterResult,
+    onResolved: @escaping (URL) -> Void
+  ) {
+    Task { @MainActor [self] in
+      guard let containerURL = await ubiquityContainerResolver.resolve(
+        containerId: containerId
+      ) else {
+        result(containerAccessError(
+          operation: operation,
+          relativePath: relativePath
+        ))
+        return
+      }
+
+      onResolved(containerURL)
+    }
+  }
+
   /// Returns the filesystem path for the iCloud container.
   private func getContainerPath(_ call: FlutterMethodCall, _ result: @escaping FlutterResult){
     guard let args = call.arguments as? Dictionary<String, Any>,
@@ -88,13 +130,14 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
       result(argumentError)
       return
     }
-    
-    guard let containerURL = FileManager.default.url(forUbiquityContainerIdentifier: containerId)
-    else {
-      result(containerAccessError(operation: "getContainerPath"))
-      return
+
+    resolveContainerURL(
+      containerId: containerId,
+      operation: "getContainerPath",
+      result: result
+    ) { containerURL in
+      result(containerURL.path)
     }
-    result(containerURL.path)
   }
   
   /// Lists all items in the container using NSMetadataQuery.
@@ -107,11 +150,24 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
       return
     }
 
-    guard let containerURL = FileManager.default.url(forUbiquityContainerIdentifier: containerId)
-    else {
-      result(containerAccessError(operation: "gather"))
-      return
+    resolveContainerURL(
+      containerId: containerId,
+      operation: "gather",
+      result: result
+    ) { [self] containerURL in
+      startGather(
+        containerURL: containerURL,
+        eventChannelName: eventChannelName,
+        result: result
+      )
     }
+  }
+
+  private func startGather(
+    containerURL: URL,
+    eventChannelName: String,
+    result: @escaping FlutterResult
+  ) {
     DebugHelper.log("containerURL: \(containerURL.path)")
 
     // Verify event channel handler exists before registering observers
@@ -128,30 +184,38 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
     query.operationQueue = metadataQueryOperationQueue
     query.searchScopes = querySearchScopes
     query.predicate = NSPredicate(format: "%K beginswith %@", NSMetadataItemPathKey, containerURL.path)
-    addGatherFilesObservers(query: query, containerURL: containerURL, eventChannelName: eventChannelName, result: result)
+    let session = makeMetadataQuerySession(query: query)
+    addGatherFilesObservers(
+      session: session,
+      containerURL: containerURL,
+      eventChannelName: eventChannelName,
+      result: result
+    )
 
     if let streamHandler {
-      streamHandler.onCancelHandler = { [self] in
-        removeObservers(query)
-        query.stop()
-        removeStreamHandler(eventChannelName)
+      streamHandler.onCancelHandler = { [weak self, weak session] in
+        session?.cancel()
+        self?.removeStreamHandler(eventChannelName)
       }
     }
-    query.start()
+    session.start()
   }
   
   /// Adds observers for metadata gather and update notifications.
-  private func addGatherFilesObservers(query: NSMetadataQuery, containerURL: URL, eventChannelName: String, result: @escaping FlutterResult) {
-    addObserver(
-      for: query,
+  private func addGatherFilesObservers(session: MetadataQuerySession, containerURL: URL, eventChannelName: String, result: @escaping FlutterResult) {
+    session.addObserver(
       name: NSNotification.Name.NSMetadataQueryDidFinishGathering
-    ) { [self] _ in
+    ) { [weak self] session, query, _ in
+      guard let self else { return }
       query.disableUpdates()
-      defer { query.enableUpdates() }
+      defer {
+        if !session.isCancelled {
+          query.enableUpdates()
+        }
+      }
       let results = query.results.compactMap { $0 as? NSMetadataItem }
       if eventChannelName.isEmpty {
-        removeObservers(query)
-        query.stop()
+        session.cancel()
       }
 
       let files = mapFileAttributes(items: results, containerURL: containerURL)
@@ -161,16 +225,20 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
     }
     
     if !eventChannelName.isEmpty {
-      addObserver(
-        for: query,
+      session.addObserver(
         name: NSNotification.Name.NSMetadataQueryDidUpdate
-      ) { [self] _ in
+      ) { [weak self] session, query, _ in
+        guard let self else { return }
         guard hasStreamHandler(named: eventChannelName) else {
           return
         }
 
         query.disableUpdates()
-        defer { query.enableUpdates() }
+        defer {
+          if !session.isCancelled {
+            query.enableUpdates()
+          }
+        }
         let results = query.results.compactMap { $0 as? NSMetadataItem }
         let files = mapFileAttributes(items: results, containerURL: containerURL)
         DispatchQueue.main.async {
@@ -285,8 +353,78 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
     return nativeCodeError(
       error,
       operation: operation,
-      relativePath: relativePath
+      relativePath: relativePath,
+      pathKind: "containerParentDirectory"
     )
+  }
+
+  private func mapNativeWriteError(
+    _ error: Error,
+    operation: String,
+    relativePath: String,
+    destinationURL: URL
+  ) -> FlutterError {
+    let nsError = error as NSError
+    return mapFileNotFoundError(
+      error,
+      operation: operation,
+      relativePath: relativePath,
+      pathKind: nativeWritePathKind(
+        for: nsError,
+        destinationURL: destinationURL
+      )
+    ) ?? mapTimeoutError(
+      error,
+      operation: operation,
+      relativePath: relativePath,
+      pathKind: "containerRelative"
+    ) ?? nativeCodeError(
+      error,
+      operation: operation,
+      relativePath: relativePath,
+      pathKind: nativeWritePathKind(
+        for: nsError,
+        destinationURL: destinationURL
+      )
+    )
+  }
+
+  private func nativeWritePathKind(
+    for nativeError: NSError,
+    destinationURL: URL
+  ) -> String {
+    guard let nativePath = nativeError.userInfo[NSFilePathErrorKey] as? String
+    else {
+      return "containerRelative"
+    }
+
+    let standardizedNativePath = URL(fileURLWithPath: nativePath)
+      .standardizedFileURL
+      .path
+    let standardizedDestinationPath = destinationURL
+      .standardizedFileURL
+      .path
+    if standardizedNativePath == standardizedDestinationPath {
+      return "destination"
+    }
+
+    let temporaryPath = FileManager.default.temporaryDirectory
+      .standardizedFileURL
+      .path
+    let normalizedTemporaryPath = temporaryPath.hasSuffix("/")
+      ? temporaryPath
+      : temporaryPath + "/"
+    if standardizedNativePath.hasPrefix(normalizedTemporaryPath) {
+      return "temporaryReplacement"
+    }
+
+    return "nativeFilePath"
+  }
+
+  private func isFileContentWriteOperation(_ operation: String) -> Bool {
+    operation == "uploadFile"
+      || operation == "writeInPlace"
+      || operation == "writeInPlaceBytes"
   }
 
   /// Copies a local file into the iCloud container (copy-in).
@@ -357,49 +495,52 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
     query.operationQueue = .main
     query.searchScopes = querySearchScopes
     query.predicate = NSPredicate(format: "%K == %@", NSMetadataItemPathKey, cloudFileURL.path)
+    let session = makeMetadataQuerySession(query: query)
 
     guard let uploadStreamHandler = registeredStreamHandler(
       for: eventChannelName
     ) else {
+      session.cancel()
       return
     }
     emitProgress(10.0, eventChannelName: eventChannelName)
-    uploadStreamHandler.onCancelHandler = { [self] in
-      removeObservers(query)
-      query.stop()
-      removeStreamHandler(eventChannelName)
+    uploadStreamHandler.onCancelHandler = { [weak self, weak session] in
+      session?.cancel()
+      self?.removeStreamHandler(eventChannelName)
     }
     addUploadObservers(
-      query: query,
+      session: session,
       cloudRelativePath: cloudRelativePath,
       eventChannelName: eventChannelName
     )
 
-    query.start()
+    session.start()
   }
   
   /// Adds observers for upload progress updates.
   private func addUploadObservers(
-    query: NSMetadataQuery,
+    session: MetadataQuerySession,
     cloudRelativePath: String,
     eventChannelName: String
   ) {
-    addObserver(
-      for: query,
+    session.addObserver(
       name: NSNotification.Name.NSMetadataQueryDidFinishGathering
-    ) { [self] _ in
+    ) { [weak self] session, query, _ in
+      guard let self else { return }
       onUploadQueryNotification(
+        session: session,
         query: query,
         cloudRelativePath: cloudRelativePath,
         eventChannelName: eventChannelName
       )
     }
     
-    addObserver(
-      for: query,
+    session.addObserver(
       name: NSNotification.Name.NSMetadataQueryDidUpdate
-    ) { [self] _ in
+    ) { [weak self] session, query, _ in
+      guard let self else { return }
       onUploadQueryNotification(
+        session: session,
         query: query,
         cloudRelativePath: cloudRelativePath,
         eventChannelName: eventChannelName
@@ -409,11 +550,12 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
   
   /// Emits upload progress updates to the event channel.
   private func onUploadQueryNotification(
+    session: MetadataQuerySession,
     query: NSMetadataQuery,
     cloudRelativePath: String,
     eventChannelName: String
   ) {
-    if !query.isStarted {
+    if session.isCancelled || !query.isStarted {
       return
     }
 
@@ -440,8 +582,7 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
         relativePath: cloudRelativePath
       ))
       streamHandler.setEvent(FlutterEndOfEventStream)
-      removeObservers(query)
-      query.stop()
+      session.cancel()
       removeStreamHandler(eventChannelName)
       return
     }
@@ -455,8 +596,7 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
           return
         }
         streamHandler.setEvent(FlutterEndOfEventStream)
-        removeObservers(query)
-        query.stop()
+        session.cancel()
         removeStreamHandler(eventChannelName)
       }
     }
@@ -474,88 +614,19 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
       return
     }
     
-    guard let containerURL = FileManager.default.url(forUbiquityContainerIdentifier: containerId)
-    else {
-      result(containerAccessError(
-        operation: "downloadFile",
-        relativePath: cloudRelativePath
-      ))
-      return
-    }
-    DebugHelper.log("containerURL: \(containerURL.path)")
-    
-    let cloudFileURL = containerURL.appendingPathComponent(cloudRelativePath)
-    let localFileURL = URL(fileURLWithPath: localFilePath)
-    do {
-      try FileManager.default.startDownloadingUbiquitousItem(at: cloudFileURL)
-    } catch {
-      let mapped = mapFileNotFoundError(
-        error,
-        operation: "downloadFile",
-        relativePath: cloudRelativePath
-      ) ?? nativeCodeError(
-        error,
-        operation: "downloadFile",
-        relativePath: cloudRelativePath
-      )
-      result(mapped)
-      return
-    }
-    
-    let completionGate = CompletionGate()
-    let completeOnce: (Any?) -> Void = { value in
-      guard completionGate.tryComplete() else {
-        return
-      }
-      result(value)
-    }
+    resolveContainerURL(
+      containerId: containerId,
+      operation: "downloadFile",
+      relativePath: cloudRelativePath,
+      result: result
+    ) { [self] containerURL in
+      DebugHelper.log("containerURL: \(containerURL.path)")
 
-    let query: NSMetadataQuery? = eventChannelName.isEmpty
-      ? nil
-      : {
-          let query = NSMetadataQuery()
-          query.operationQueue = .main
-          query.searchScopes = querySearchScopes
-          query.predicate = NSPredicate(
-            format: "%K == %@",
-            NSMetadataItemPathKey,
-            cloudFileURL.path
-          )
-          return query
-        }()
-
-    let downloadStreamHandler = registeredStreamHandler(for: eventChannelName)
-    downloadStreamHandler?.onCancelHandler = { [self] in
-      if let query {
-        removeObservers(query)
-        query.stop()
-      }
-      removeStreamHandler(eventChannelName)
-      completeOnce(
-        FlutterError(
-          code: "E_CANCEL",
-          message: "Download canceled",
-          details: nil
-        )
-      )
-    }
-
-    if let query {
-      addDownloadObservers(
-        query: query,
-        eventChannelName: eventChannelName
-      )
-      query.start()
-    }
-    if downloadStreamHandler != nil {
-      emitProgress(10.0, eventChannelName: eventChannelName)
-    }
-
-    readDocumentAt(url: cloudFileURL, destinationURL: localFileURL) { [self] error in
-      if completionGate.isCompleted {
-        return
-      }
-      if let error = error {
+      let cloudFileURL = containerURL.appendingPathComponent(cloudRelativePath)
+      let localFileURL = URL(fileURLWithPath: localFilePath)
+      do {
+        try FileManager.default.startDownloadingUbiquitousItem(at: cloudFileURL)
+      } catch {
         let mapped = mapFileNotFoundError(
           error,
           operation: "downloadFile",
@@ -565,25 +636,88 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
           operation: "downloadFile",
           relativePath: cloudRelativePath
         )
-        downloadStreamHandler?.setEvent(mapped)
-        downloadStreamHandler?.setEvent(FlutterEndOfEventStream)
-        if let query {
-          removeObservers(query)
-          query.stop()
-        }
-        removeStreamHandler(eventChannelName)
-        completeOnce(mapped)
+        result(mapped)
         return
       }
 
-      emitProgress(100.0, eventChannelName: eventChannelName)
-      downloadStreamHandler?.setEvent(FlutterEndOfEventStream)
-      if let query {
-        removeObservers(query)
-        query.stop()
+      let completionGate = CompletionGate()
+      let completeOnce: (Any?) -> Void = { value in
+        guard completionGate.tryComplete() else {
+          return
+        }
+        result(value)
       }
-      removeStreamHandler(eventChannelName)
-      completeOnce(nil)
+
+      let downloadSession: MetadataQuerySession? = eventChannelName.isEmpty
+        ? nil
+        : {
+            let query = NSMetadataQuery()
+            query.operationQueue = .main
+            query.searchScopes = querySearchScopes
+            query.predicate = NSPredicate(
+              format: "%K == %@",
+              NSMetadataItemPathKey,
+              cloudFileURL.path
+            )
+            return makeMetadataQuerySession(query: query)
+          }()
+
+      let downloadStreamHandler = registeredStreamHandler(for: eventChannelName)
+      if let downloadSession {
+        downloadStreamHandler?.onCancelHandler = {
+          [weak self, weak downloadSession] in
+          downloadSession?.cancel()
+          self?.removeStreamHandler(eventChannelName)
+          completeOnce(
+            FlutterError(
+              code: "E_CANCEL",
+              message: "Download canceled",
+              details: nil
+            )
+          )
+        }
+      }
+
+      if let downloadSession {
+        addDownloadObservers(
+          session: downloadSession,
+          eventChannelName: eventChannelName
+        )
+        downloadSession.start()
+      }
+      if downloadStreamHandler != nil {
+        emitProgress(10.0, eventChannelName: eventChannelName)
+      }
+
+      readDocumentAt(url: cloudFileURL, destinationURL: localFileURL) {
+        [self] error in
+        if completionGate.isCompleted {
+          return
+        }
+        if let error = error {
+          let mapped = mapFileNotFoundError(
+            error,
+            operation: "downloadFile",
+            relativePath: cloudRelativePath
+          ) ?? nativeCodeError(
+            error,
+            operation: "downloadFile",
+            relativePath: cloudRelativePath
+          )
+          downloadStreamHandler?.setEvent(mapped)
+          downloadStreamHandler?.setEvent(FlutterEndOfEventStream)
+          downloadSession?.cancel()
+          removeStreamHandler(eventChannelName)
+          completeOnce(mapped)
+          return
+        }
+
+        emitProgress(100.0, eventChannelName: eventChannelName)
+        downloadStreamHandler?.setEvent(FlutterEndOfEventStream)
+        downloadSession?.cancel()
+        removeStreamHandler(eventChannelName)
+        completeOnce(nil)
+      }
     }
   }
 
@@ -602,73 +736,71 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
     let retryBackoff = (args["retryBackoffSeconds"] as? [NSNumber])?
       .map { $0.doubleValue } ?? []
 
-    guard let containerURL = FileManager.default.url(forUbiquityContainerIdentifier: containerId)
-    else {
-      result(containerAccessError(
-        operation: "readInPlace",
-        relativePath: relativePath
-      ))
-      return
-    }
+    resolveContainerURL(
+      containerId: containerId,
+      operation: "readInPlace",
+      relativePath: relativePath,
+      result: result
+    ) { [self] containerURL in
+      let fileURL = containerURL.appendingPathComponent(relativePath)
 
-    let fileURL = containerURL.appendingPathComponent(relativePath)
-
-    do {
-      try FileManager.default.startDownloadingUbiquitousItem(at: fileURL)
-    } catch {
-      let mapped = mapFileNotFoundError(
-        error,
-        operation: "readInPlace",
-        relativePath: relativePath
-      ) ?? nativeCodeError(
-        error,
-        operation: "readInPlace",
-        relativePath: relativePath
-      )
-      result(mapped)
-      return
-    }
-
-    Task { @MainActor [self] in
       do {
-        try await waitForDownloadCompletion(
-          at: fileURL,
-          idleTimeouts: idleTimeouts,
-          retryBackoff: retryBackoff
-        )
+        try FileManager.default.startDownloadingUbiquitousItem(at: fileURL)
       } catch {
-        if let timeoutError = mapTimeoutError(
+        let mapped = mapFileNotFoundError(
           error,
           operation: "readInPlace",
           relativePath: relativePath
-        ) {
-          result(timeoutError)
-          return
-        }
-        result(nativeCodeError(
+        ) ?? nativeCodeError(
           error,
           operation: "readInPlace",
           relativePath: relativePath
-        ))
+        )
+        result(mapped)
         return
       }
 
-      readInPlaceDocument(at: fileURL) { [self] contents, error in
-        if let error = error {
-          let mapped = mapFileNotFoundError(
-            error,
-            operation: "readInPlace",
-            relativePath: relativePath
-          ) ?? nativeCodeError(
-            error,
-            operation: "readInPlace",
-            relativePath: relativePath
+      Task { @MainActor [self] in
+        do {
+          try await waitForDownloadCompletion(
+            at: fileURL,
+            idleTimeouts: idleTimeouts,
+            retryBackoff: retryBackoff
           )
-          result(mapped)
+        } catch {
+          if let timeoutError = mapTimeoutError(
+            error,
+            operation: "readInPlace",
+            relativePath: relativePath
+          ) {
+            result(timeoutError)
+            return
+          }
+          result(nativeCodeError(
+            error,
+            operation: "readInPlace",
+            relativePath: relativePath
+          ))
           return
         }
 
-        result(contents)
+        readInPlaceDocument(at: fileURL) { [self] contents, error in
+          if let error = error {
+            let mapped = mapFileNotFoundError(
+              error,
+              operation: "readInPlace",
+              relativePath: relativePath
+            ) ?? nativeCodeError(
+              error,
+              operation: "readInPlace",
+              relativePath: relativePath
+            )
+            result(mapped)
+            return
+          }
+
+          result(contents)
+        }
       }
     }
   }
@@ -702,18 +834,11 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
 
       writeInPlaceDocument(at: fileURL, contents: contents) { [self] error in
         if let error = error {
-          let mapped = mapFileNotFoundError(
+          let mapped = mapNativeWriteError(
             error,
             operation: "writeInPlace",
-            relativePath: relativePath
-          ) ?? mapTimeoutError(
-            error,
-            operation: "writeInPlace",
-            relativePath: relativePath
-          ) ?? nativeCodeError(
-            error,
-            operation: "writeInPlace",
-            relativePath: relativePath
+            relativePath: relativePath,
+            destinationURL: fileURL
           )
           result(mapped)
           return
@@ -738,76 +863,74 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
     let retryBackoff = (args["retryBackoffSeconds"] as? [NSNumber])?
       .map { $0.doubleValue } ?? []
 
-    guard let containerURL = FileManager.default.url(forUbiquityContainerIdentifier: containerId)
-    else {
-      result(containerAccessError(
-        operation: "readInPlaceBytes",
-        relativePath: relativePath
-      ))
-      return
-    }
+    resolveContainerURL(
+      containerId: containerId,
+      operation: "readInPlaceBytes",
+      relativePath: relativePath,
+      result: result
+    ) { [self] containerURL in
+      let fileURL = containerURL.appendingPathComponent(relativePath)
 
-    let fileURL = containerURL.appendingPathComponent(relativePath)
-
-    do {
-      try FileManager.default.startDownloadingUbiquitousItem(at: fileURL)
-    } catch {
-      let mapped = mapFileNotFoundError(
-        error,
-        operation: "readInPlaceBytes",
-        relativePath: relativePath
-      ) ?? nativeCodeError(
-        error,
-        operation: "readInPlaceBytes",
-        relativePath: relativePath
-      )
-      result(mapped)
-      return
-    }
-
-    Task { @MainActor [self] in
       do {
-        try await waitForDownloadCompletion(
-          at: fileURL,
-          idleTimeouts: idleTimeouts,
-          retryBackoff: retryBackoff
-        )
+        try FileManager.default.startDownloadingUbiquitousItem(at: fileURL)
       } catch {
-        if let timeoutError = mapTimeoutError(
+        let mapped = mapFileNotFoundError(
           error,
           operation: "readInPlaceBytes",
           relativePath: relativePath
-        ) {
-          result(timeoutError)
-          return
-        }
-        result(nativeCodeError(
+        ) ?? nativeCodeError(
           error,
           operation: "readInPlaceBytes",
           relativePath: relativePath
-        ))
+        )
+        result(mapped)
         return
       }
 
-      readInPlaceBinaryDocument(at: fileURL) { [self] contents, error in
-        if let error = error {
-          let mapped = mapFileNotFoundError(
-            error,
-            operation: "readInPlaceBytes",
-            relativePath: relativePath
-          ) ?? nativeCodeError(
-            error,
-            operation: "readInPlaceBytes",
-            relativePath: relativePath
+      Task { @MainActor [self] in
+        do {
+          try await waitForDownloadCompletion(
+            at: fileURL,
+            idleTimeouts: idleTimeouts,
+            retryBackoff: retryBackoff
           )
-          result(mapped)
+        } catch {
+          if let timeoutError = mapTimeoutError(
+            error,
+            operation: "readInPlaceBytes",
+            relativePath: relativePath
+          ) {
+            result(timeoutError)
+            return
+          }
+          result(nativeCodeError(
+            error,
+            operation: "readInPlaceBytes",
+            relativePath: relativePath
+          ))
           return
         }
 
-        if let contents {
-          result(FlutterStandardTypedData(bytes: contents))
-        } else {
-          result(nil)
+        readInPlaceBinaryDocument(at: fileURL) { [self] contents, error in
+          if let error = error {
+            let mapped = mapFileNotFoundError(
+              error,
+              operation: "readInPlaceBytes",
+              relativePath: relativePath
+            ) ?? nativeCodeError(
+              error,
+              operation: "readInPlaceBytes",
+              relativePath: relativePath
+            )
+            result(mapped)
+            return
+          }
+
+          if let contents {
+            result(FlutterStandardTypedData(bytes: contents))
+          } else {
+            result(nil)
+          }
         }
       }
     }
@@ -843,18 +966,11 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
       writeInPlaceBinaryDocument(at: fileURL, contents: contents.data) {
         [self] error in
         if let error = error {
-          let mapped = mapFileNotFoundError(
+          let mapped = mapNativeWriteError(
             error,
             operation: "writeInPlaceBytes",
-            relativePath: relativePath
-          ) ?? mapTimeoutError(
-            error,
-            operation: "writeInPlaceBytes",
-            relativePath: relativePath
-          ) ?? nativeCodeError(
-            error,
-            operation: "writeInPlaceBytes",
-            relativePath: relativePath
+            relativePath: relativePath,
+            destinationURL: fileURL
           )
           result(mapped)
           return
@@ -866,24 +982,26 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
   
   /// Adds observers for download progress updates.
   private func addDownloadObservers(
-    query: NSMetadataQuery,
+    session: MetadataQuerySession,
     eventChannelName: String
   ) {
-    addObserver(
-      for: query,
+    session.addObserver(
       name: NSNotification.Name.NSMetadataQueryDidFinishGathering
-    ) { [self] _ in
+    ) { [weak self] session, query, _ in
+      guard let self else { return }
       emitDownloadProgress(
+        session: session,
         query: query,
         eventChannelName: eventChannelName
       )
     }
     
-    addObserver(
-      for: query,
+    session.addObserver(
       name: NSNotification.Name.NSMetadataQueryDidUpdate
-    ) { [self] _ in
+    ) { [weak self] session, query, _ in
+      guard let self else { return }
       emitDownloadProgress(
+        session: session,
         query: query,
         eventChannelName: eventChannelName
       )
@@ -892,10 +1010,11 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
   
   /// Emits download progress updates.
   private func emitDownloadProgress(
+    session: MetadataQuerySession,
     query: NSMetadataQuery,
     eventChannelName: String
   ) {
-    if !query.isStarted {
+    if session.isCancelled || !query.isStarted {
       return
     }
     guard let fileItem = query.results.first as? NSMetadataItem else { return }
@@ -915,17 +1034,15 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
       return
     }
     
-    guard let containerURL = FileManager.default.url(forUbiquityContainerIdentifier: containerId)
-    else {
-      result(containerAccessError(
-        operation: "documentExists",
-        relativePath: relativePath
-      ))
-      return
+    resolveContainerURL(
+      containerId: containerId,
+      operation: "documentExists",
+      relativePath: relativePath,
+      result: result
+    ) { containerURL in
+      let fileURL = containerURL.appendingPathComponent(relativePath)
+      result(FileManager.default.fileExists(atPath: fileURL.path))
     }
-
-    let fileURL = containerURL.appendingPathComponent(relativePath)
-    result(FileManager.default.fileExists(atPath: fileURL.path))
   }
 
   /// Get file or directory metadata without downloading content.
@@ -939,44 +1056,42 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
       return
     }
     
-    guard let containerURL = FileManager.default.url(forUbiquityContainerIdentifier: containerId)
-    else {
-      result(containerAccessError(
-        operation: "getDocumentMetadata",
-        relativePath: relativePath
-      ))
-      return
-    }
+    resolveContainerURL(
+      containerId: containerId,
+      operation: "getDocumentMetadata",
+      relativePath: relativePath,
+      result: result
+    ) { [self] containerURL in
+      let fileURL = containerURL.appendingPathComponent(relativePath)
+      guard FileManager.default.fileExists(atPath: fileURL.path) else {
+        result(nil)
+        return
+      }
 
-    let fileURL = containerURL.appendingPathComponent(relativePath)
-    guard FileManager.default.fileExists(atPath: fileURL.path) else {
-      result(nil)
-      return
-    }
-
-    do {
-      let values = try fileURL.resourceValues(forKeys: [
-        .isDirectoryKey,
-        .fileSizeKey,
-        .creationDateKey,
-        .contentModificationDateKey,
-        .ubiquitousItemDownloadingStatusKey,
-        .ubiquitousItemIsDownloadingKey,
-        .ubiquitousItemIsUploadedKey,
-        .ubiquitousItemIsUploadingKey,
-        .ubiquitousItemHasUnresolvedConflictsKey,
-      ])
-      result(mapResourceValues(
-        fileURL: fileURL,
-        values: values,
-        containerPath: containerURL.standardizedFileURL.path
-      ))
-    } catch {
-      result(nativeCodeError(
-        error,
-        operation: "getDocumentMetadata",
-        relativePath: relativePath
-      ))
+      do {
+        let values = try fileURL.resourceValues(forKeys: [
+          .isDirectoryKey,
+          .fileSizeKey,
+          .creationDateKey,
+          .contentModificationDateKey,
+          .ubiquitousItemDownloadingStatusKey,
+          .ubiquitousItemIsDownloadingKey,
+          .ubiquitousItemIsUploadedKey,
+          .ubiquitousItemIsUploadingKey,
+          .ubiquitousItemHasUnresolvedConflictsKey,
+        ])
+        result(mapResourceValues(
+          fileURL: fileURL,
+          values: values,
+          containerPath: containerURL.standardizedFileURL.path
+        ))
+      } catch {
+        result(nativeCodeError(
+          error,
+          operation: "getDocumentMetadata",
+          relativePath: relativePath
+        ))
+      }
     }
   }
 
@@ -994,50 +1109,47 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
       return
     }
 
-    guard let containerURL = FileManager.default.url(
-      forUbiquityContainerIdentifier: containerId
-    ) else {
-      result(containerAccessError(
-        operation: "getItemMetadata",
-        relativePath: relativePath
-      ))
-      return
-    }
+    resolveContainerURL(
+      containerId: containerId,
+      operation: "getItemMetadata",
+      relativePath: relativePath,
+      result: result
+    ) { [self] containerURL in
+      let fileURL = containerURL.appendingPathComponent(relativePath)
+      guard FileManager.default.fileExists(atPath: fileURL.path) else {
+        result(nil)
+        return
+      }
 
-    let fileURL = containerURL.appendingPathComponent(relativePath)
-    guard FileManager.default.fileExists(atPath: fileURL.path) else {
-      result(nil)
-      return
-    }
-
-    do {
-      let values = try fileURL.resourceValues(forKeys: [
-        .isDirectoryKey,
-        .fileSizeKey,
-        .creationDateKey,
-        .contentModificationDateKey,
-        .ubiquitousItemDownloadingStatusKey,
-        .ubiquitousItemIsDownloadingKey,
-        .ubiquitousItemIsUploadedKey,
-        .ubiquitousItemIsUploadingKey,
-        .ubiquitousItemHasUnresolvedConflictsKey,
-      ])
-      let containerPath = containerURL.standardizedFileURL.path
-      var metadata = mapResourceValues(
-        fileURL: fileURL,
-        values: values,
-        containerPath: containerPath
-      )
-      metadata["downloadStatus"] = normalizeDownloadStatus(
-        values.ubiquitousItemDownloadingStatus
-      ) ?? values.ubiquitousItemDownloadingStatus?.rawValue
-      result(metadata)
-    } catch {
-      result(nativeCodeError(
-        error,
-        operation: "getItemMetadata",
-        relativePath: relativePath
-      ))
+      do {
+        let values = try fileURL.resourceValues(forKeys: [
+          .isDirectoryKey,
+          .fileSizeKey,
+          .creationDateKey,
+          .contentModificationDateKey,
+          .ubiquitousItemDownloadingStatusKey,
+          .ubiquitousItemIsDownloadingKey,
+          .ubiquitousItemIsUploadedKey,
+          .ubiquitousItemIsUploadingKey,
+          .ubiquitousItemHasUnresolvedConflictsKey,
+        ])
+        let containerPath = containerURL.standardizedFileURL.path
+        var metadata = mapResourceValues(
+          fileURL: fileURL,
+          values: values,
+          containerPath: containerPath
+        )
+        metadata["downloadStatus"] = normalizeDownloadStatus(
+          values.ubiquitousItemDownloadingStatus
+        ) ?? values.ubiquitousItemDownloadingStatus?.rawValue
+        result(metadata)
+      } catch {
+        result(nativeCodeError(
+          error,
+          operation: "getItemMetadata",
+          relativePath: relativePath
+        ))
+      }
     }
   }
   
@@ -1060,87 +1172,87 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
 
     let subdir = args["relativePath"] as? String
 
-    guard let containerURL = FileManager.default
-      .url(forUbiquityContainerIdentifier: containerId)
-    else {
-      result(containerAccessError(operation: "listContents", relativePath: subdir))
-      return
-    }
+    resolveContainerURL(
+      containerId: containerId,
+      operation: "listContents",
+      relativePath: subdir,
+      result: result
+    ) { [self] containerURL in
+      let listURL = subdir != nil
+        ? containerURL.appendingPathComponent(subdir!)
+        : containerURL
 
-    let listURL = subdir != nil
-      ? containerURL.appendingPathComponent(subdir!)
-      : containerURL
+      let keys: [URLResourceKey] = [
+        .isDirectoryKey,
+        .ubiquitousItemDownloadingStatusKey,
+        .ubiquitousItemIsDownloadingKey,
+        .ubiquitousItemIsUploadedKey,
+        .ubiquitousItemIsUploadingKey,
+        .ubiquitousItemHasUnresolvedConflictsKey,
+      ]
 
-    let keys: [URLResourceKey] = [
-      .isDirectoryKey,
-      .ubiquitousItemDownloadingStatusKey,
-      .ubiquitousItemIsDownloadingKey,
-      .ubiquitousItemIsUploadedKey,
-      .ubiquitousItemIsUploadingKey,
-      .ubiquitousItemHasUnresolvedConflictsKey,
-    ]
-
-    DispatchQueue.global(qos: .userInitiated).async {
-      do {
-        let contents = try FileManager.default.contentsOfDirectory(
-          at: listURL,
-          includingPropertiesForKeys: keys,
-          // Do NOT use .skipsHiddenFiles — iCloud placeholders
-          // have a leading dot and would be filtered out.
-          options: []
-        )
-
-        let containerPath = containerURL.standardizedFileURL.path
-        let keysSet = Set(keys)
-        let parentRelative = self.relativePath(
-          for: listURL, containerPath: containerPath
-        )
-        var items: [[String: Any?]] = []
-
-        for fileURL in contents {
-          let diskName = fileURL.lastPathComponent
-          let resolvedName = self.resolveICloudPlaceholderName(diskName)
-
-          // Skip system hidden files (.DS_Store, .Trash, etc.).
-          // Placeholder files (.foo.icloud) have already been resolved
-          // to their real name, so they pass through this filter.
-          if resolvedName.hasPrefix(".") { continue }
-
-          let values = try fileURL.resourceValues(
-            forKeys: keysSet
+      DispatchQueue.global(qos: .userInitiated).async {
+        do {
+          let contents = try FileManager.default.contentsOfDirectory(
+            at: listURL,
+            includingPropertiesForKeys: keys,
+            // Do NOT use .skipsHiddenFiles — iCloud placeholders
+            // have a leading dot and would be filtered out.
+            options: []
           )
 
-          // Build relative path from the container root so the
-          // result is usable with other plugin methods.
-          let itemRelativePath = parentRelative.isEmpty
-            ? resolvedName
-            : parentRelative + "/" + resolvedName
+          let containerPath = containerURL.standardizedFileURL.path
+          let keysSet = Set(keys)
+          let parentRelative = self.relativePath(
+            for: listURL, containerPath: containerPath
+          )
+          var items: [[String: Any?]] = []
 
-          items.append([
-            "relativePath": itemRelativePath,
-            "isDirectory": values.isDirectory ?? false,
-            "downloadStatus": self.normalizeDownloadStatus(
-              values.ubiquitousItemDownloadingStatus
-            ),
-            "isDownloading":
-              values.ubiquitousItemIsDownloading ?? false,
-            "isUploaded":
-              values.ubiquitousItemIsUploaded ?? false,
-            "isUploading":
-              values.ubiquitousItemIsUploading ?? false,
-            "hasUnresolvedConflicts":
-              values.ubiquitousItemHasUnresolvedConflicts ?? false,
-          ])
-        }
+          for fileURL in contents {
+            let diskName = fileURL.lastPathComponent
+            let resolvedName = self.resolveICloudPlaceholderName(diskName)
 
-        DispatchQueue.main.async { result(items) }
-      } catch {
-        DispatchQueue.main.async {
-          result(self.nativeCodeError(
-            error,
-            operation: "listContents",
-            relativePath: subdir
-          ))
+            // Skip system hidden files (.DS_Store, .Trash, etc.).
+            // Placeholder files (.foo.icloud) have already been resolved
+            // to their real name, so they pass through this filter.
+            if resolvedName.hasPrefix(".") { continue }
+
+            let values = try fileURL.resourceValues(
+              forKeys: keysSet
+            )
+
+            // Build relative path from the container root so the
+            // result is usable with other plugin methods.
+            let itemRelativePath = parentRelative.isEmpty
+              ? resolvedName
+              : parentRelative + "/" + resolvedName
+
+            items.append([
+              "relativePath": itemRelativePath,
+              "isDirectory": values.isDirectory ?? false,
+              "downloadStatus": self.normalizeDownloadStatus(
+                values.ubiquitousItemDownloadingStatus
+              ),
+              "isDownloading":
+                values.ubiquitousItemIsDownloading ?? false,
+              "isUploaded":
+                values.ubiquitousItemIsUploaded ?? false,
+              "isUploading":
+                values.ubiquitousItemIsUploading ?? false,
+              "hasUnresolvedConflicts":
+                values.ubiquitousItemHasUnresolvedConflicts ?? false,
+            ])
+          }
+
+          DispatchQueue.main.async { result(items) }
+        } catch {
+          DispatchQueue.main.async {
+            result(self.nativeCodeError(
+              error,
+              operation: "listContents",
+              relativePath: subdir
+            ))
+          }
         }
       }
     }
@@ -1199,43 +1311,42 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
       return
     }
     
-    guard let containerURL = FileManager.default.url(forUbiquityContainerIdentifier: containerId)
-    else {
-      result(containerAccessError(
-        operation: "delete",
-        relativePath: relativePath
-      ))
-      return
-    }
-    DebugHelper.log("containerURL: \(containerURL.path)")
+    resolveContainerURL(
+      containerId: containerId,
+      operation: "delete",
+      relativePath: relativePath,
+      result: result
+    ) { [self] containerURL in
+      DebugHelper.log("containerURL: \(containerURL.path)")
 
-    let fileURL = containerURL.appendingPathComponent(relativePath)
-    guard FileManager.default.fileExists(atPath: fileURL.path) else {
-      result(itemNotFoundError(operation: "delete", relativePath: relativePath))
-      return
-    }
+      let fileURL = containerURL.appendingPathComponent(relativePath)
+      guard FileManager.default.fileExists(atPath: fileURL.path) else {
+        result(itemNotFoundError(operation: "delete", relativePath: relativePath))
+        return
+      }
 
-    let fileCoordinator = NSFileCoordinator(filePresenter: nil)
-    fileCoordinator.coordinate(
-      writingItemAt: fileURL,
-      options: NSFileCoordinator.WritingOptions.forDeleting,
-      error: nil
-    ) { writingURL in
-      do {
-        try FileManager.default.removeItem(at: writingURL)
-        result(nil)
-      } catch {
-        DebugHelper.log("error: \(error.localizedDescription)")
-        let mapped = mapFileNotFoundError(
-          error,
-          operation: "delete",
-          relativePath: relativePath
-        ) ?? nativeCodeError(
-          error,
-          operation: "delete",
-          relativePath: relativePath
-        )
-        result(mapped)
+      let fileCoordinator = NSFileCoordinator(filePresenter: nil)
+      fileCoordinator.coordinate(
+        writingItemAt: fileURL,
+        options: NSFileCoordinator.WritingOptions.forDeleting,
+        error: nil
+      ) { writingURL in
+        do {
+          try FileManager.default.removeItem(at: writingURL)
+          result(nil)
+        } catch {
+          DebugHelper.log("error: \(error.localizedDescription)")
+          let mapped = mapFileNotFoundError(
+            error,
+            operation: "delete",
+            relativePath: relativePath
+          ) ?? nativeCodeError(
+            error,
+            operation: "delete",
+            relativePath: relativePath
+          )
+          result(mapped)
+        }
       }
     }
   }
@@ -1251,49 +1362,48 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
       return
     }
     
-    guard let containerURL = FileManager.default.url(forUbiquityContainerIdentifier: containerId)
-    else {
-      result(containerAccessError(
-        operation: "move",
-        relativePath: atRelativePath
-      ))
-      return
-    }
-    DebugHelper.log("containerURL: \(containerURL.path)")
+    resolveContainerURL(
+      containerId: containerId,
+      operation: "move",
+      relativePath: atRelativePath,
+      result: result
+    ) { [self] containerURL in
+      DebugHelper.log("containerURL: \(containerURL.path)")
 
-    let atURL = containerURL.appendingPathComponent(atRelativePath)
-    guard FileManager.default.fileExists(atPath: atURL.path) else {
-      result(itemNotFoundError(operation: "move", relativePath: atRelativePath))
-      return
-    }
+      let atURL = containerURL.appendingPathComponent(atRelativePath)
+      guard FileManager.default.fileExists(atPath: atURL.path) else {
+        result(itemNotFoundError(operation: "move", relativePath: atRelativePath))
+        return
+      }
 
-    let toURL = containerURL.appendingPathComponent(toRelativePath)
-    let fileCoordinator = NSFileCoordinator(filePresenter: nil)
-    fileCoordinator.coordinate(
-      writingItemAt: atURL,
-      options: NSFileCoordinator.WritingOptions.forMoving,
-      writingItemAt: toURL,
-      options: NSFileCoordinator.WritingOptions.forReplacing,
-      error: nil
-    ) { atWritingURL, toWritingURL in
-      do {
-        let toDirURL = toWritingURL.deletingLastPathComponent()
-        if !FileManager.default.fileExists(atPath: toDirURL.path) {
-          try FileManager.default.createDirectory(
-            at: toDirURL,
-            withIntermediateDirectories: true,
-            attributes: nil
-          )
+      let toURL = containerURL.appendingPathComponent(toRelativePath)
+      let fileCoordinator = NSFileCoordinator(filePresenter: nil)
+      fileCoordinator.coordinate(
+        writingItemAt: atURL,
+        options: NSFileCoordinator.WritingOptions.forMoving,
+        writingItemAt: toURL,
+        options: NSFileCoordinator.WritingOptions.forReplacing,
+        error: nil
+      ) { atWritingURL, toWritingURL in
+        do {
+          let toDirURL = toWritingURL.deletingLastPathComponent()
+          if !FileManager.default.fileExists(atPath: toDirURL.path) {
+            try FileManager.default.createDirectory(
+              at: toDirURL,
+              withIntermediateDirectories: true,
+              attributes: nil
+            )
+          }
+          try FileManager.default.moveItem(at: atWritingURL, to: toWritingURL)
+          result(nil)
+        } catch {
+          DebugHelper.log("error: \(error.localizedDescription)")
+          result(nativeCodeError(
+            error,
+            operation: "move",
+            relativePath: atRelativePath
+          ))
         }
-        try FileManager.default.moveItem(at: atWritingURL, to: toWritingURL)
-        result(nil)
-      } catch {
-        DebugHelper.log("error: \(error.localizedDescription)")
-        result(nativeCodeError(
-          error,
-          operation: "move",
-          relativePath: atRelativePath
-        ))
       }
     }
   }
@@ -1309,113 +1419,112 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
       return
     }
     
-    guard let containerURL = FileManager.default.url(forUbiquityContainerIdentifier: containerId)
-    else {
-      result(containerAccessError(
-        operation: "copy",
-        relativePath: fromRelativePath
-      ))
-      return
-    }
-    DebugHelper.log("containerURL: \(containerURL.path)")
-    
-    let fromURL = containerURL.appendingPathComponent(fromRelativePath)
-    guard FileManager.default.fileExists(atPath: fromURL.path) else {
-      result(itemNotFoundError(operation: "copy", relativePath: fromRelativePath))
-      return
-    }
+    resolveContainerURL(
+      containerId: containerId,
+      operation: "copy",
+      relativePath: fromRelativePath,
+      result: result
+    ) { [self] containerURL in
+      DebugHelper.log("containerURL: \(containerURL.path)")
 
-    let toURL = containerURL.appendingPathComponent(toRelativePath)
-    let fileCoordinator = NSFileCoordinator(filePresenter: nil)
-    var handledExistingDestination = false
-    var overwriteError: Error?
-    var sourceCoordinationError: NSError?
-
-    fileCoordinator.coordinate(
-      readingItemAt: fromURL,
-      options: .withoutChanges,
-      error: &sourceCoordinationError
-    ) { fromReadingURL in
-      do {
-        handledExistingDestination = try copyOverwritingExistingItem(
-          from: fromReadingURL,
-          to: toURL
-        )
-      } catch {
-        overwriteError = error
+      let fromURL = containerURL.appendingPathComponent(fromRelativePath)
+      guard FileManager.default.fileExists(atPath: fromURL.path) else {
+        result(itemNotFoundError(operation: "copy", relativePath: fromRelativePath))
+        return
       }
-    }
 
-    if let sourceCoordinationError {
-      DebugHelper.log("copy source coordination error: \(sourceCoordinationError.localizedDescription)")
-      result(nativeCodeError(
-        sourceCoordinationError,
-        operation: "copy",
-        relativePath: fromRelativePath
-      ))
-      return
-    }
+      let toURL = containerURL.appendingPathComponent(toRelativePath)
+      let fileCoordinator = NSFileCoordinator(filePresenter: nil)
+      var handledExistingDestination = false
+      var overwriteError: Error?
+      var sourceCoordinationError: NSError?
 
-    if let overwriteError {
-      DebugHelper.log("copy error: \(overwriteError.localizedDescription)")
-      result(nativeCodeError(
-        overwriteError,
-        operation: "copy",
-        relativePath: toRelativePath
-      ))
-      return
-    }
-
-    if handledExistingDestination {
-      result(nil)
-      return
-    }
-
-    // Use reading coordination for source and writing coordination for destination
-    var copyCoordinationError: NSError?
-    fileCoordinator.coordinate(
-      readingItemAt: fromURL,
-      options: .withoutChanges,
-      writingItemAt: toURL,
-      options: .forReplacing,
-      error: &copyCoordinationError
-    ) { fromReadingURL, toWritingURL in
-      do {
-        // Create destination directory if needed
-        let toDirURL = toWritingURL.deletingLastPathComponent()
-        if !FileManager.default.fileExists(atPath: toDirURL.path) {
-          try FileManager.default.createDirectory(
-            at: toDirURL,
-            withIntermediateDirectories: true,
-            attributes: nil
+      fileCoordinator.coordinate(
+        readingItemAt: fromURL,
+        options: .withoutChanges,
+        error: &sourceCoordinationError
+      ) { fromReadingURL in
+        do {
+          handledExistingDestination = try copyOverwritingExistingItem(
+            from: fromReadingURL,
+            to: toURL
           )
+        } catch {
+          overwriteError = error
         }
-        
-        // Remove destination file if it exists
-        if FileManager.default.fileExists(atPath: toWritingURL.path) {
-          try FileManager.default.removeItem(at: toWritingURL)
-        }
-        
-        // Copy the file
-        try FileManager.default.copyItem(at: fromReadingURL, to: toWritingURL)
-        result(nil)
-      } catch {
-        DebugHelper.log("copy error: \(error.localizedDescription)")
+      }
+
+      if let sourceCoordinationError {
+        DebugHelper.log("copy source coordination error: \(sourceCoordinationError.localizedDescription)")
         result(nativeCodeError(
-          error,
+          sourceCoordinationError,
+          operation: "copy",
+          relativePath: fromRelativePath
+        ))
+        return
+      }
+
+      if let overwriteError {
+        DebugHelper.log("copy error: \(overwriteError.localizedDescription)")
+        result(nativeCodeError(
+          overwriteError,
+          operation: "copy",
+          relativePath: toRelativePath
+        ))
+        return
+      }
+
+      if handledExistingDestination {
+        result(nil)
+        return
+      }
+
+      // Use reading coordination for source and writing coordination for destination
+      var copyCoordinationError: NSError?
+      fileCoordinator.coordinate(
+        readingItemAt: fromURL,
+        options: .withoutChanges,
+        writingItemAt: toURL,
+        options: .forReplacing,
+        error: &copyCoordinationError
+      ) { fromReadingURL, toWritingURL in
+        do {
+          // Create destination directory if needed
+          let toDirURL = toWritingURL.deletingLastPathComponent()
+          if !FileManager.default.fileExists(atPath: toDirURL.path) {
+            try FileManager.default.createDirectory(
+              at: toDirURL,
+              withIntermediateDirectories: true,
+              attributes: nil
+            )
+          }
+
+          // Remove destination file if it exists
+          if FileManager.default.fileExists(atPath: toWritingURL.path) {
+            try FileManager.default.removeItem(at: toWritingURL)
+          }
+
+          // Copy the file
+          try FileManager.default.copyItem(at: fromReadingURL, to: toWritingURL)
+          result(nil)
+        } catch {
+          DebugHelper.log("copy error: \(error.localizedDescription)")
+          result(nativeCodeError(
+            error,
+            operation: "copy",
+            relativePath: toRelativePath
+          ))
+        }
+      }
+
+      if let copyCoordinationError {
+        DebugHelper.log("copy coordination error: \(copyCoordinationError.localizedDescription)")
+        result(nativeCodeError(
+          copyCoordinationError,
           operation: "copy",
           relativePath: toRelativePath
         ))
       }
-    }
-
-    if let copyCoordinationError {
-      DebugHelper.log("copy coordination error: \(copyCoordinationError.localizedDescription)")
-      result(nativeCodeError(
-        copyCoordinationError,
-        operation: "copy",
-        relativePath: toRelativePath
-      ))
     }
   }
 
@@ -1480,38 +1589,26 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
     return true
   }
   
-  /// Adds an observers for a metadata query.
-  private func addObserver(
-    for query: NSMetadataQuery,
-    name: Notification.Name,
-    using block: @escaping (Notification) -> Void
-  ) {
-    let token = NotificationCenter.default.addObserver(
-      forName: name,
-      object: query,
-      queue: query.operationQueue,
-      using: block
-    )
-    let key = ObjectIdentifier(query)
-    queryObserversQueue.sync {
-      var tokens = queryObservers[key] ?? []
-      tokens.append(token)
-      queryObservers[key] = tokens
+  /// Creates and retains a metadata query session until cleanup completes.
+  private func makeMetadataQuerySession(
+    query: NSMetadataQuery
+  ) -> MetadataQuerySession {
+    let session = MetadataQuerySession(query: query) { [weak self] session in
+      self?.releaseMetadataQuerySession(session)
     }
+    metadataQuerySessionsQueue.sync {
+      metadataQuerySessions[session.id] = session
+    }
+    return session
   }
 
-  /// Removes all observers for a metadata query.
-  private func removeObservers(_ query: NSMetadataQuery) {
-    let key = ObjectIdentifier(query)
-    let tokens: [NSObjectProtocol]? = queryObserversQueue.sync {
-      queryObservers[key]
-    }
-    guard let tokens else { return }
-    for token in tokens {
-      NotificationCenter.default.removeObserver(token)
-    }
-    queryObserversQueue.sync {
-      queryObservers.removeValue(forKey: key)
+  /// Releases a metadata query session after observers have been removed and
+  /// the query has been stopped.
+  private func releaseMetadataQuerySession(
+    _ session: MetadataQuerySession
+  ) {
+    metadataQuerySessionsQueue.sync {
+      metadataQuerySessions.removeValue(forKey: session.id)
     }
   }
   
@@ -1605,6 +1702,7 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
     operation: String,
     retryable: Bool,
     relativePath: String? = nil,
+    pathKind: String? = nil,
     nativeError: NSError? = nil,
     underlying: Any? = nil
   ) -> FlutterError {
@@ -1615,6 +1713,9 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
     ]
     if let relativePath {
       details["relativePath"] = relativePath
+    }
+    if let pathKind {
+      details["pathKind"] = pathKind
     }
     if let nativeError {
       details["nativeDomain"] = nativeError.domain
@@ -1649,7 +1750,8 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
     relativePath: String? = nil,
     code: String = "E_FNF",
     message: String = "The file does not exist",
-    nativeError: NSError? = nil
+    nativeError: NSError? = nil,
+    pathKind: String? = nil
   ) -> FlutterError {
     flutterError(
       code: code,
@@ -1658,6 +1760,7 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
       operation: operation,
       retryable: false,
       relativePath: relativePath,
+      pathKind: pathKind,
       nativeError: nativeError
     )
   }
@@ -1665,7 +1768,8 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
   private func timeoutError(
     operation: String,
     relativePath: String? = nil,
-    nativeError: NSError? = nil
+    nativeError: NSError? = nil,
+    pathKind: String? = nil
   ) -> FlutterError {
     flutterError(
       code: "E_TIMEOUT",
@@ -1674,6 +1778,7 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
       operation: operation,
       retryable: true,
       relativePath: relativePath,
+      pathKind: pathKind,
       nativeError: nativeError
     )
   }
@@ -1682,7 +1787,8 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
   private func mapFileNotFoundError(
     _ error: Error,
     operation: String = "unknown",
-    relativePath: String? = nil
+    relativePath: String? = nil,
+    pathKind: String? = nil
   ) -> FlutterError? {
     let nsError = error as NSError
     guard nsError.domain == NSCocoaErrorDomain else { return nil }
@@ -1695,13 +1801,15 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
           relativePath: relativePath,
           code: "E_FNF_WRITE",
           message: "The file could not be written because it does not exist",
-          nativeError: nsError
+          nativeError: nsError,
+          pathKind: pathKind
         )
       }
       return itemNotFoundError(
         operation: operation,
         relativePath: relativePath,
-        nativeError: nsError
+        nativeError: nsError,
+        pathKind: pathKind
       )
     case NSFileReadNoSuchFileError:
       return itemNotFoundError(
@@ -1709,7 +1817,8 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
         relativePath: relativePath,
         code: "E_FNF_READ",
         message: "The file could not be read because it does not exist",
-        nativeError: nsError
+        nativeError: nsError,
+        pathKind: pathKind
       )
     default:
       return nil
@@ -1720,7 +1829,8 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
   private func nativeCodeError(
     _ error: Error,
     operation: String = "unknown",
-    relativePath: String? = nil
+    relativePath: String? = nil,
+    pathKind: String? = nil
   ) -> FlutterError {
     let nsError = error as NSError
 
@@ -1734,6 +1844,7 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
           operation: operation,
           retryable: false,
           relativePath: relativePath,
+          pathKind: pathKind,
           nativeError: nsError
         )
       case CoordinatedReplaceWriter.itemNotDownloadedReplaceStateCode:
@@ -1744,6 +1855,7 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
           operation: operation,
           retryable: true,
           relativePath: relativePath,
+          pathKind: pathKind,
           nativeError: nsError
         )
       case CoordinatedReplaceWriter.downloadInProgressReplaceStateCode:
@@ -1754,6 +1866,7 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
           operation: operation,
           retryable: true,
           relativePath: relativePath,
+          pathKind: pathKind,
           nativeError: nsError
         )
       case CoordinatedReplaceWriter.directoryReplaceStateCode:
@@ -1764,6 +1877,38 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
           operation: operation,
           retryable: false,
           relativePath: relativePath,
+          pathKind: pathKind,
+          nativeError: nsError
+        )
+      case CoordinatedReplaceWriter.coordinationReplaceStateCode:
+        return flutterError(
+          code: "E_COORDINATION",
+          message: nsError.localizedDescription,
+          category: "coordination",
+          operation: operation,
+          retryable: false,
+          relativePath: relativePath,
+          pathKind: pathKind,
+          nativeError: nsError
+        )
+      default:
+        break
+      }
+    }
+
+    if isFileContentWriteOperation(operation)
+      && nsError.domain == NSCocoaErrorDomain {
+      switch nsError.code {
+      case NSFileWriteInvalidFileNameError,
+           NSFileWriteUnsupportedSchemeError:
+        return flutterError(
+          code: "E_ARG",
+          message: nsError.localizedDescription,
+          category: "invalidArgument",
+          operation: operation,
+          retryable: false,
+          relativePath: relativePath,
+          pathKind: pathKind,
           nativeError: nsError
         )
       default:
@@ -1778,6 +1923,7 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
       operation: operation,
       retryable: false,
       relativePath: relativePath,
+      pathKind: pathKind,
       nativeError: nsError,
       underlying: String(describing: error)
     )
@@ -1786,14 +1932,16 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
   private func mapTimeoutError(
     _ error: Error,
     operation: String = "unknown",
-    relativePath: String? = nil
+    relativePath: String? = nil,
+    pathKind: String? = nil
   ) -> FlutterError? {
     let nsError = error as NSError
     guard nsError.domain == "ICloudStorageTimeout" else { return nil }
     return timeoutError(
       operation: operation,
       relativePath: relativePath,
-      nativeError: nsError
+      nativeError: nsError,
+      pathKind: pathKind
     )
   }
 }

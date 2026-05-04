@@ -78,6 +78,7 @@ class ICloudOperationException implements Exception {
     required this.retryable,
     required this.message,
     this.relativePath,
+    this.pathKind,
     this.nativeDomain,
     this.nativeCode,
     this.nativeDescription,
@@ -98,6 +99,9 @@ class ICloudOperationException implements Exception {
 
   /// Relative path associated with the failure, when present.
   final String? relativePath;
+
+  /// Non-PII classification of the native path involved in the failure.
+  final String? pathKind;
 
   /// Native error domain, when present.
   final String? nativeDomain;
@@ -125,6 +129,7 @@ class ICloudItemNotFoundException extends ICloudOperationException {
           retryable: data.retryable,
           message: data.message,
           relativePath: data.relativePath,
+          pathKind: data.pathKind,
           nativeDomain: data.nativeDomain,
           nativeCode: data.nativeCode,
           nativeDescription: data.nativeDescription,
@@ -142,6 +147,7 @@ class ICloudContainerAccessException extends ICloudOperationException {
           retryable: data.retryable,
           message: data.message,
           relativePath: data.relativePath,
+          pathKind: data.pathKind,
           nativeDomain: data.nativeDomain,
           nativeCode: data.nativeCode,
           nativeDescription: data.nativeDescription,
@@ -159,6 +165,7 @@ class ICloudConflictException extends ICloudOperationException {
           retryable: data.retryable,
           message: data.message,
           relativePath: data.relativePath,
+          pathKind: data.pathKind,
           nativeDomain: data.nativeDomain,
           nativeCode: data.nativeCode,
           nativeDescription: data.nativeDescription,
@@ -177,6 +184,7 @@ class ICloudItemNotDownloadedException extends ICloudOperationException {
           retryable: data.retryable,
           message: data.message,
           relativePath: data.relativePath,
+          pathKind: data.pathKind,
           nativeDomain: data.nativeDomain,
           nativeCode: data.nativeCode,
           nativeDescription: data.nativeDescription,
@@ -195,6 +203,7 @@ class ICloudDownloadInProgressException extends ICloudOperationException {
           retryable: data.retryable,
           message: data.message,
           relativePath: data.relativePath,
+          pathKind: data.pathKind,
           nativeDomain: data.nativeDomain,
           nativeCode: data.nativeCode,
           nativeDescription: data.nativeDescription,
@@ -212,6 +221,7 @@ class ICloudTimeoutException extends ICloudOperationException {
           retryable: data.retryable,
           message: data.message,
           relativePath: data.relativePath,
+          pathKind: data.pathKind,
           nativeDomain: data.nativeDomain,
           nativeCode: data.nativeCode,
           nativeDescription: data.nativeDescription,
@@ -229,6 +239,7 @@ class ICloudCoordinationException extends ICloudOperationException {
           retryable: data.retryable,
           message: data.message,
           relativePath: data.relativePath,
+          pathKind: data.pathKind,
           nativeDomain: data.nativeDomain,
           nativeCode: data.nativeCode,
           nativeDescription: data.nativeDescription,
@@ -246,6 +257,7 @@ class ICloudInvalidArgumentException extends ICloudOperationException {
           retryable: data.retryable,
           message: data.message,
           relativePath: data.relativePath,
+          pathKind: data.pathKind,
           nativeDomain: data.nativeDomain,
           nativeCode: data.nativeCode,
           nativeDescription: data.nativeDescription,
@@ -263,6 +275,7 @@ class ICloudUnknownNativeException extends ICloudOperationException {
           retryable: data.retryable,
           message: data.message,
           relativePath: data.relativePath,
+          pathKind: data.pathKind,
           nativeDomain: data.nativeDomain,
           nativeCode: data.nativeCode,
           nativeDescription: data.nativeDescription,
@@ -280,6 +293,7 @@ ICloudOperationException mapICloudPlatformException(PlatformException error) {
     retryable: payload['retryable'] == true,
     message: error.message ?? 'iCloud operation failed',
     relativePath: _readString(payload, 'relativePath'),
+    pathKind: _readString(payload, 'pathKind'),
     nativeDomain: _readString(payload, 'nativeDomain'),
     nativeCode: _readInt(payload, 'nativeCode'),
     nativeDescription: _readString(payload, 'nativeDescription'),
@@ -306,6 +320,7 @@ class _ICloudOperationExceptionData {
     required this.retryable,
     required this.message,
     this.relativePath,
+    this.pathKind,
     this.nativeDomain,
     this.nativeCode,
     this.nativeDescription,
@@ -317,6 +332,7 @@ class _ICloudOperationExceptionData {
   final bool retryable;
   final String message;
   final String? relativePath;
+  final String? pathKind;
   final String? nativeDomain;
   final int? nativeCode;
   final String? nativeDescription;
