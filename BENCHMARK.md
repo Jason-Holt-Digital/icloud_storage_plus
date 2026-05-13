@@ -10,17 +10,20 @@ This method was called inside a loop in `mapFileAttributesFromQuery`, which
 iterates over all items in the iCloud container. For a container with $N$ items,
 this resulted in $O(N)$ repeated normalizations just to re-calculate the same
 constant container path.
+Furthermore, the previous method still performed $O(N)$ runtime allocations and computations
+inside the loop to determine `hasSuffix("/")`, string concatenation (`+ "/"`),
+and `.count` computations for the `containerPath`.
 
 ## Optimization
-We refactored the code to calculate `containerPath` once before the loop and
-pass it down to `relativePath` (and intermediate mapping functions). This
-changes the complexity of the container path standardization step from being
-performed $O(N)$ times to $O(1)$ time per gather operation, while the overall
-file listing remains $O(N)$ because `relativePath` is still computed for each
-item.
+We refactored the code to calculate `containerPath`, its normalized variant (with a trailing slash),
+and their respective lengths *once* before the loop inside a `ContainerPathInfo` struct. We then
+pass this struct down to `relativePath` (and intermediate mapping functions). This
+changes the complexity of all container path operations (standardization, normalization, counting)
+from being performed $O(N)$ times to $O(1)$ time per gather operation, while the overall
+file listing remains $O(N)$ because `relativePath` is still computed for each item.
 
 ## Performance Impact
-This change reduces the *container path normalization* from $O(N)$ to $O(1)$ per
+This change reduces the *container path normalization and computation* from $O(N)$ to $O(1)$ per
 query gathering operation (the overall listing still performs $O(N)$ work per
 item, including relative path computation).
 
@@ -37,48 +40,69 @@ be treated as a full end-to-end iCloud performance benchmark.
 ```swift
 import Foundation
 
-func relativePathOld(for fileURL: URL, containerURL: URL) -> String {
-    let containerPath = containerURL.standardizedFileURL.path
-    let filePath = fileURL.standardizedFileURL.path
-    guard filePath.hasPrefix(containerPath) else {
-        return fileURL.lastPathComponent
+struct ContainerPathInfo {
+    let path: String
+    let normalizedPath: String
+    let pathLength: Int
+    let normalizedPathLength: Int
+
+    init(path: String) {
+      self.path = path
+      self.normalizedPath = path.hasSuffix("/") ? path : path + "/"
+      self.pathLength = path.count
+      self.normalizedPathLength = normalizedPath.count
     }
-    var relative = String(filePath.dropFirst(containerPath.count))
+}
+
+func relativePathOld(for fileURL: URL, containerPath: String) -> String {
+    let filePath = fileURL.standardizedFileURL.path
+    let normalizedContainerPath = containerPath.hasSuffix("/")
+      ? containerPath
+      : containerPath + "/"
+    guard filePath == containerPath || filePath.hasPrefix(normalizedContainerPath) else {
+      return fileURL.lastPathComponent
+    }
+    let prefixLength = filePath == containerPath
+      ? containerPath.count
+      : normalizedContainerPath.count
+    var relative = String(filePath.dropFirst(prefixLength))
     if relative.hasPrefix("/") {
-        relative.removeFirst()
+      relative.removeFirst()
     }
     return relative
 }
 
-func relativePathNew(for fileURL: URL, containerPath: String) -> String {
+func relativePathNew(for fileURL: URL, containerPathInfo: ContainerPathInfo) -> String {
     let filePath = fileURL.standardizedFileURL.path
-    guard filePath.hasPrefix(containerPath) else {
-        return fileURL.lastPathComponent
+    guard filePath == containerPathInfo.path || filePath.hasPrefix(containerPathInfo.normalizedPath) else {
+      return fileURL.lastPathComponent
     }
-    var relative = String(filePath.dropFirst(containerPath.count))
+    let prefixLength = filePath == containerPathInfo.path
+      ? containerPathInfo.pathLength
+      : containerPathInfo.normalizedPathLength
+    var relative = String(filePath.dropFirst(prefixLength))
     if relative.hasPrefix("/") {
-        relative.removeFirst()
+      relative.removeFirst()
     }
     return relative
 }
 
-let containerURL = URL(
-    fileURLWithPath: "/Users/user/Library/Mobile Documents/iCloud~com~example~app/Documents/"
-)
+let containerPath = "/Users/user/Library/Mobile Documents/iCloud~com~example~app/Documents"
+let containerURL = URL(fileURLWithPath: containerPath)
 let fileURL = containerURL.appendingPathComponent("folder/file.txt")
 let iterations = 100_000
 
 let startOld = CFAbsoluteTimeGetCurrent()
 for _ in 0..<iterations {
-    _ = relativePathOld(for: fileURL, containerURL: containerURL)
+    _ = relativePathOld(for: fileURL, containerPath: containerPath)
 }
 let endOld = CFAbsoluteTimeGetCurrent()
 print("Old implementation time: \\(endOld - startOld) seconds")
 
 let startNew = CFAbsoluteTimeGetCurrent()
-let containerPath = containerURL.standardizedFileURL.path
+let info = ContainerPathInfo(path: containerPath)
 for _ in 0..<iterations {
-    _ = relativePathNew(for: fileURL, containerPath: containerPath)
+    _ = relativePathNew(for: fileURL, containerPathInfo: info)
 }
 let endNew = CFAbsoluteTimeGetCurrent()
 print("New implementation time: \\(endNew - startNew) seconds")
@@ -96,9 +120,9 @@ directory-enumeration loop was removed:
    hidden files do not pay the metadata lookup cost.
 
 ## Affected Methods
-- `relativePath(for:containerURL:)` -> `relativePath(for:containerPath:)`
-- `mapMetadataItem(_:containerURL:)` -> `mapMetadataItem(_:containerPath:)`
-- `mapResourceValues(fileURL:values:containerURL:)` -> `mapResourceValues(fileURL:values:containerPath:)`
+- `relativePath(for:containerPath:)` -> `relativePath(for:containerPathInfo:)`
+- `mapMetadataItem(_:containerPath:)` -> `mapMetadataItem(_:containerPathInfo:)`
+- `mapResourceValues(fileURL:values:containerPath:)` -> `mapResourceValues(fileURL:values:containerPathInfo:)`
 - `mapFileAttributesFromQuery(query:containerURL:)` (Implementation updated)
 - `getDocumentMetadata` (Implementation updated)
 - `listContents` (Loop optimized in both iOS and macOS plugins)
