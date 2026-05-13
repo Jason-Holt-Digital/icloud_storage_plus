@@ -1063,34 +1063,39 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
       result: result
     ) { [self] containerURL in
       let fileURL = containerURL.appendingPathComponent(relativePath)
-      guard FileManager.default.fileExists(atPath: fileURL.path) else {
-        result(nil)
-        return
-      }
 
-      do {
-        let values = try fileURL.resourceValues(forKeys: [
-          .isDirectoryKey,
-          .fileSizeKey,
-          .creationDateKey,
-          .contentModificationDateKey,
-          .ubiquitousItemDownloadingStatusKey,
-          .ubiquitousItemIsDownloadingKey,
-          .ubiquitousItemIsUploadedKey,
-          .ubiquitousItemIsUploadingKey,
-          .ubiquitousItemHasUnresolvedConflictsKey,
-        ])
-        result(mapResourceValues(
-          fileURL: fileURL,
-          values: values,
-          containerPath: containerURL.standardizedFileURL.path
-        ))
-      } catch {
-        result(nativeCodeError(
-          error,
-          operation: "getDocumentMetadata",
-          relativePath: relativePath
-        ))
+      DispatchQueue.global(qos: .userInitiated).async {
+        guard FileManager.default.fileExists(atPath: fileURL.path) else {
+          DispatchQueue.main.async { result(nil) }
+          return
+        }
+
+        do {
+          let values = try fileURL.resourceValues(forKeys: [
+            .isDirectoryKey,
+            .fileSizeKey,
+            .creationDateKey,
+            .contentModificationDateKey,
+            .ubiquitousItemDownloadingStatusKey,
+            .ubiquitousItemIsDownloadingKey,
+            .ubiquitousItemIsUploadedKey,
+            .ubiquitousItemIsUploadingKey,
+            .ubiquitousItemHasUnresolvedConflictsKey,
+          ])
+          let mapped = self.mapResourceValues(
+            fileURL: fileURL,
+            values: values,
+            containerPath: containerURL.standardizedFileURL.path
+          )
+          DispatchQueue.main.async { result(mapped) }
+        } catch {
+          let nativeError = self.nativeCodeError(
+            error,
+            operation: "getDocumentMetadata",
+            relativePath: relativePath
+          )
+          DispatchQueue.main.async { result(nativeError) }
+        }
       }
     }
   }
@@ -1116,39 +1121,43 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
       result: result
     ) { [self] containerURL in
       let fileURL = containerURL.appendingPathComponent(relativePath)
-      guard FileManager.default.fileExists(atPath: fileURL.path) else {
-        result(nil)
-        return
-      }
 
-      do {
-        let values = try fileURL.resourceValues(forKeys: [
-          .isDirectoryKey,
-          .fileSizeKey,
-          .creationDateKey,
-          .contentModificationDateKey,
-          .ubiquitousItemDownloadingStatusKey,
-          .ubiquitousItemIsDownloadingKey,
-          .ubiquitousItemIsUploadedKey,
-          .ubiquitousItemIsUploadingKey,
-          .ubiquitousItemHasUnresolvedConflictsKey,
-        ])
-        let containerPath = containerURL.standardizedFileURL.path
-        var metadata = mapResourceValues(
-          fileURL: fileURL,
-          values: values,
-          containerPath: containerPath
-        )
-        metadata["downloadStatus"] = normalizeDownloadStatus(
-          values.ubiquitousItemDownloadingStatus
-        ) ?? values.ubiquitousItemDownloadingStatus?.rawValue
-        result(metadata)
-      } catch {
-        result(nativeCodeError(
-          error,
-          operation: "getItemMetadata",
-          relativePath: relativePath
-        ))
+      DispatchQueue.global(qos: .userInitiated).async {
+        guard FileManager.default.fileExists(atPath: fileURL.path) else {
+          DispatchQueue.main.async { result(nil) }
+          return
+        }
+
+        do {
+          let values = try fileURL.resourceValues(forKeys: [
+            .isDirectoryKey,
+            .fileSizeKey,
+            .creationDateKey,
+            .contentModificationDateKey,
+            .ubiquitousItemDownloadingStatusKey,
+            .ubiquitousItemIsDownloadingKey,
+            .ubiquitousItemIsUploadedKey,
+            .ubiquitousItemIsUploadingKey,
+            .ubiquitousItemHasUnresolvedConflictsKey,
+          ])
+          let containerPath = containerURL.standardizedFileURL.path
+          var metadata = self.mapResourceValues(
+            fileURL: fileURL,
+            values: values,
+            containerPath: containerPath
+          )
+          metadata["downloadStatus"] = self.normalizeDownloadStatus(
+            values.ubiquitousItemDownloadingStatus
+          ) ?? values.ubiquitousItemDownloadingStatus?.rawValue
+          DispatchQueue.main.async { result(metadata) }
+        } catch {
+          let nativeError = self.nativeCodeError(
+            error,
+            operation: "getItemMetadata",
+            relativePath: relativePath
+          )
+          DispatchQueue.main.async { result(nativeError) }
+        }
       }
     }
   }
