@@ -474,44 +474,48 @@ class MethodChannelICloudStorage extends ICloudStoragePlatform {
   GatherResult _mapFilesFromDynamicList(
     List<dynamic>? mapList,
   ) {
+    if (mapList == null) {
+      return const GatherResult(files: [], invalidEntries: []);
+    }
+
     final files = <ICloudFile>[];
     final invalidEntries = <GatherInvalidEntry>[];
-    if (mapList != null) {
-      var index = 0;
-      for (final entry in mapList) {
-        if (entry is! Map<dynamic, dynamic>) {
+    final length = mapList.length;
+
+    for (var i = 0; i < length; i++) {
+      final entry = mapList[i];
+      if (entry is! Map<dynamic, dynamic>) {
+        _logger.fine(
+          'Skipping malformed metadata entry: expected Map, got '
+          '${entry.runtimeType}',
+        );
+        invalidEntries.add(
+          GatherInvalidEntry(
+            error: 'Expected map, got ${entry.runtimeType}',
+            rawEntry: entry,
+            index: i,
+          ),
+        );
+      } else {
+        try {
+          files.add(ICloudFile.fromMap(entry));
+        } on Exception catch (error, stackTrace) {
           _logger.fine(
-            'Skipping malformed metadata entry: expected Map, got '
-            '${entry.runtimeType}',
+            'Skipping malformed metadata entry: $error',
+            error,
+            stackTrace,
           );
           invalidEntries.add(
             GatherInvalidEntry(
-              error: 'Expected map, got ${entry.runtimeType}',
+              error: error.toString(),
               rawEntry: entry,
-              index: index,
+              index: i,
             ),
           );
-        } else {
-          try {
-            files.add(ICloudFile.fromMap(entry));
-          } on Exception catch (error, stackTrace) {
-            _logger.fine(
-              'Skipping malformed metadata entry: $error',
-              error,
-              stackTrace,
-            );
-            invalidEntries.add(
-              GatherInvalidEntry(
-                error: error.toString(),
-                rawEntry: entry,
-                index: index,
-              ),
-            );
-          }
         }
-        index++;
       }
     }
+
     if (invalidEntries.isNotEmpty) {
       _logger.warning(
         'Skipped ${invalidEntries.length} malformed metadata '
