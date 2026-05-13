@@ -102,3 +102,26 @@ directory-enumeration loop was removed:
 - `mapFileAttributesFromQuery(query:containerURL:)` (Implementation updated)
 - `getDocumentMetadata` (Implementation updated)
 - `listContents` (Loop optimized in both iOS and macOS plugins)
+
+## Performance Optimization: Non-blocking iCloud Downloads
+
+## Issue
+The call to `FileManager.default.startDownloadingUbiquitousItem(at:)` performs synchronous file system operations and inter-process communication. In multiple paths (`downloadFile`, `readInPlace`, `readInPlaceBytes`, and write entrypoints), this was being executed directly on the `@MainActor`. As a result, initiating an iCloud file download would block the main thread, leading to potential UI hitches and frame drops in the Flutter application.
+
+## Optimization
+We wrapped the `startDownloadingUbiquitousItem` calls inside a detached background task:
+```swift
+try await Task.detached(priority: .userInitiated) {
+    try FileManager.default.startDownloadingUbiquitousItem(at: fileURL)
+}.value
+```
+This offloads the synchronous blocking call to a background thread while maintaining the required `@MainActor` isolation and asynchronous control flow for the rest of the file coordination logic.
+
+## Performance Impact
+Moving `startDownloadingUbiquitousItem(at:)` off the main thread completely eliminates UI blocking when initiating downloads. While the overall download time is identical, this significantly improves application responsiveness and frame rate during heavy file synchronization operations, especially when triggering downloads for multiple files simultaneously or when the underlying IPC to the daemon introduces latency.
+
+## Affected Methods
+- `downloadFile` (iOS & macOS plugins)
+- `readInPlace` (iOS & macOS plugins)
+- `readInPlaceBytes` (iOS & macOS plugins)
+- `liveEnsureDownloaded` (in `CoordinatedReplaceWriter.swift` for both platforms)

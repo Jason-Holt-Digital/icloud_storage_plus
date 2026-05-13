@@ -660,23 +660,27 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
 
       let cloudFileURL = containerURL.appendingPathComponent(cloudRelativePath)
       let localFileURL = URL(fileURLWithPath: localFilePath)
-      do {
-        try FileManager.default.startDownloadingUbiquitousItem(at: cloudFileURL)
-      } catch {
-        let mapped = mapFileNotFoundError(
-          error,
-          operation: "downloadFile",
-          relativePath: cloudRelativePath
-        ) ?? nativeCodeError(
-          error,
-          operation: "downloadFile",
-          relativePath: cloudRelativePath
-        )
-        result(mapped)
-        return
-      }
 
-      let completionGate = CompletionGate()
+      Task { @MainActor [self] in
+        do {
+          try await Task.detached(priority: .userInitiated) {
+            try FileManager.default.startDownloadingUbiquitousItem(at: cloudFileURL)
+          }.value
+        } catch {
+          let mapped = mapFileNotFoundError(
+            error,
+            operation: "downloadFile",
+            relativePath: cloudRelativePath
+          ) ?? nativeCodeError(
+            error,
+            operation: "downloadFile",
+            relativePath: cloudRelativePath
+          )
+          result(mapped)
+          return
+        }
+
+        let completionGate = CompletionGate()
       let completeOnce: (Any?) -> Void = { value in
         guard completionGate.tryComplete() else {
           return
@@ -754,6 +758,7 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
         removeStreamHandler(eventChannelName)
         completeOnce(nil)
       }
+      }
     }
   }
 
@@ -780,23 +785,25 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
     ) { [self] containerURL in
       let fileURL = containerURL.appendingPathComponent(relativePath)
 
-      do {
-        try FileManager.default.startDownloadingUbiquitousItem(at: fileURL)
-      } catch {
-        let mapped = mapFileNotFoundError(
-          error,
-          operation: "readInPlace",
-          relativePath: relativePath
-        ) ?? nativeCodeError(
-          error,
-          operation: "readInPlace",
-          relativePath: relativePath
-        )
-        result(mapped)
-        return
-      }
-
       Task { @MainActor [self] in
+        do {
+          try await Task.detached(priority: .userInitiated) {
+            try FileManager.default.startDownloadingUbiquitousItem(at: fileURL)
+          }.value
+        } catch {
+          let mapped = mapFileNotFoundError(
+            error,
+            operation: "readInPlace",
+            relativePath: relativePath
+          ) ?? nativeCodeError(
+            error,
+            operation: "readInPlace",
+            relativePath: relativePath
+          )
+          result(mapped)
+          return
+        }
+
         do {
           try await waitForDownloadCompletion(
             at: fileURL,
@@ -907,23 +914,25 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
     ) { [self] containerURL in
       let fileURL = containerURL.appendingPathComponent(relativePath)
 
-      do {
-        try FileManager.default.startDownloadingUbiquitousItem(at: fileURL)
-      } catch {
-        let mapped = mapFileNotFoundError(
-          error,
-          operation: "readInPlaceBytes",
-          relativePath: relativePath
-        ) ?? nativeCodeError(
-          error,
-          operation: "readInPlaceBytes",
-          relativePath: relativePath
-        )
-        result(mapped)
-        return
-      }
-
       Task { @MainActor [self] in
+        do {
+          try await Task.detached(priority: .userInitiated) {
+            try FileManager.default.startDownloadingUbiquitousItem(at: fileURL)
+          }.value
+        } catch {
+          let mapped = mapFileNotFoundError(
+            error,
+            operation: "readInPlaceBytes",
+            relativePath: relativePath
+          ) ?? nativeCodeError(
+            error,
+            operation: "readInPlaceBytes",
+            relativePath: relativePath
+          )
+          result(mapped)
+          return
+        }
+
         do {
           try await waitForDownloadCompletion(
             at: fileURL,

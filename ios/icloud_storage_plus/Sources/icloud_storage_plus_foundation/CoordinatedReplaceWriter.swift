@@ -245,7 +245,9 @@ extension CoordinatedReplaceWriter {
         guard values.ubiquitousItemDownloadingStatus != .current else {
             return
         }
-        try FileManager.default.startDownloadingUbiquitousItem(at: url)
+        try await Task.detached(priority: .userInitiated) {
+            try FileManager.default.startDownloadingUbiquitousItem(at: url)
+        }.value
         try await waitForDownloadCompletion(
             at: url,
             idleTimeouts: DownloadSchedule.interactiveWrite.idleTimeouts,
