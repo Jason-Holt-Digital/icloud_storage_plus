@@ -102,3 +102,17 @@ directory-enumeration loop was removed:
 - `mapFileAttributesFromQuery(query:containerURL:)` (Implementation updated)
 - `getDocumentMetadata` (Implementation updated)
 - `listContents` (Loop optimized in both iOS and macOS plugins)
+
+## Performance Optimization: Avoid Redundant Array Allocation in mapFileAttributesFromQuery
+
+### Issue
+In `ios/icloud_storage_plus/Sources/icloud_storage_plus/iOSICloudStoragePlugin.swift`, the `mapFileAttributesFromQuery` method previously iterated over `query.results` to extract `PendingQueryItem`s using `compactMap`, storing them in an intermediate array `pendingItems`. Then, it iterated over `pendingItems` using a `for` loop to build the final `[[String: Any?]]` array. This resulted in redundant array allocations and multiple passes over the data.
+
+### Optimization
+The code was refactored to combine the two passes into a single `compactMap` call. This avoids the allocation of the intermediate `pendingItems` array and reduces the number of loops from two to one, directly mapping `NSMetadataItem`s to the final dictionary format.
+
+### Performance Impact
+The time complexity remains $O(N)$, but memory allocations and redundant iterations are eliminated. This is particularly beneficial when querying directories with thousands of files, leading to faster execution times and lower memory overhead.
+
+### Benchmark
+A standalone Swift benchmark (`scripts/benchmark_map_file_attributes.swift`) was created to simulate processing 100,000 items over 10 iterations. Since the Swift compiler is unavailable in the execution environment, we rely on the logical deduction that avoiding intermediate array allocation and redundant loops strictly improves performance (reducing allocations and passes). The conceptual benchmark script is maintained in the repository for verification on macOS/iOS environments.
