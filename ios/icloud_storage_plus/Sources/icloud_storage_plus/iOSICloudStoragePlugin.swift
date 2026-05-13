@@ -23,6 +23,10 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
     queue.qualityOfService = .userInitiated
     return queue
   }()
+  private let fileCoordinatorQueue = DispatchQueue(
+    label: "icloud_storage_plus.file_coordinator",
+    qos: .userInitiated
+  )
   private let ubiquityContainerResolver: UbiquityContainerResolver
 
   init(
@@ -1356,32 +1360,52 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
       DebugHelper.log("containerURL: \(containerURL.path)")
 
       let fileURL = containerURL.appendingPathComponent(relativePath)
-      guard FileManager.default.fileExists(atPath: fileURL.path) else {
-        result(itemNotFoundError(operation: "delete", relativePath: relativePath))
-        return
+      let completionGate = CompletionGate()
+      let completeOnce: (Any?) -> Void = { value in
+        guard completionGate.tryComplete() else { return }
+        DispatchQueue.main.async { result(value) }
       }
 
-      let fileCoordinator = NSFileCoordinator(filePresenter: nil)
-      fileCoordinator.coordinate(
-        writingItemAt: fileURL,
-        options: NSFileCoordinator.WritingOptions.forDeleting,
-        error: nil
-      ) { writingURL in
-        do {
-          try FileManager.default.removeItem(at: writingURL)
-          result(nil)
-        } catch {
-          DebugHelper.log("error: \(error.localizedDescription)")
-          let mapped = mapFileNotFoundError(
-            error,
+      fileCoordinatorQueue.async { [self] in
+        guard FileManager.default.fileExists(atPath: fileURL.path) else {
+          completeOnce(itemNotFoundError(
             operation: "delete",
             relativePath: relativePath
-          ) ?? nativeCodeError(
-            error,
+          ))
+          return
+        }
+
+        let fileCoordinator = NSFileCoordinator(filePresenter: nil)
+        var coordinationError: NSError?
+        fileCoordinator.coordinate(
+          writingItemAt: fileURL,
+          options: NSFileCoordinator.WritingOptions.forDeleting,
+          error: &coordinationError
+        ) { writingURL in
+          do {
+            try FileManager.default.removeItem(at: writingURL)
+            completeOnce(nil)
+          } catch {
+            DebugHelper.log("error: \(error.localizedDescription)")
+            let mapped = mapFileNotFoundError(
+              error,
+              operation: "delete",
+              relativePath: relativePath
+            ) ?? nativeCodeError(
+              error,
+              operation: "delete",
+              relativePath: relativePath
+            )
+            completeOnce(mapped)
+          }
+        }
+
+        if let coordinationError {
+          completeOnce(nativeCodeError(
+            coordinationError,
             operation: "delete",
             relativePath: relativePath
-          )
-          result(mapped)
+          ))
         }
       }
     }
@@ -1407,35 +1431,55 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
       DebugHelper.log("containerURL: \(containerURL.path)")
 
       let atURL = containerURL.appendingPathComponent(atRelativePath)
-      guard FileManager.default.fileExists(atPath: atURL.path) else {
-        result(itemNotFoundError(operation: "move", relativePath: atRelativePath))
-        return
+      let toURL = containerURL.appendingPathComponent(toRelativePath)
+      let completionGate = CompletionGate()
+      let completeOnce: (Any?) -> Void = { value in
+        guard completionGate.tryComplete() else { return }
+        DispatchQueue.main.async { result(value) }
       }
 
-      let toURL = containerURL.appendingPathComponent(toRelativePath)
-      let fileCoordinator = NSFileCoordinator(filePresenter: nil)
-      fileCoordinator.coordinate(
-        writingItemAt: atURL,
-        options: NSFileCoordinator.WritingOptions.forMoving,
-        writingItemAt: toURL,
-        options: NSFileCoordinator.WritingOptions.forReplacing,
-        error: nil
-      ) { atWritingURL, toWritingURL in
-        do {
-          let toDirURL = toWritingURL.deletingLastPathComponent()
-          if !FileManager.default.fileExists(atPath: toDirURL.path) {
-            try FileManager.default.createDirectory(
-              at: toDirURL,
-              withIntermediateDirectories: true,
-              attributes: nil
-            )
+      fileCoordinatorQueue.async { [self] in
+        guard FileManager.default.fileExists(atPath: atURL.path) else {
+          completeOnce(itemNotFoundError(
+            operation: "move",
+            relativePath: atRelativePath
+          ))
+          return
+        }
+
+        let fileCoordinator = NSFileCoordinator(filePresenter: nil)
+        var coordinationError: NSError?
+        fileCoordinator.coordinate(
+          writingItemAt: atURL,
+          options: NSFileCoordinator.WritingOptions.forMoving,
+          writingItemAt: toURL,
+          options: NSFileCoordinator.WritingOptions.forReplacing,
+          error: &coordinationError
+        ) { atWritingURL, toWritingURL in
+          do {
+            let toDirURL = toWritingURL.deletingLastPathComponent()
+            if !FileManager.default.fileExists(atPath: toDirURL.path) {
+              try FileManager.default.createDirectory(
+                at: toDirURL,
+                withIntermediateDirectories: true,
+                attributes: nil
+              )
+            }
+            try FileManager.default.moveItem(at: atWritingURL, to: toWritingURL)
+            completeOnce(nil)
+          } catch {
+            DebugHelper.log("error: \(error.localizedDescription)")
+            completeOnce(nativeCodeError(
+              error,
+              operation: "move",
+              relativePath: atRelativePath
+            ))
           }
-          try FileManager.default.moveItem(at: atWritingURL, to: toWritingURL)
-          result(nil)
-        } catch {
-          DebugHelper.log("error: \(error.localizedDescription)")
-          result(nativeCodeError(
-            error,
+        }
+
+        if let coordinationError {
+          completeOnce(nativeCodeError(
+            coordinationError,
             operation: "move",
             relativePath: atRelativePath
           ))
