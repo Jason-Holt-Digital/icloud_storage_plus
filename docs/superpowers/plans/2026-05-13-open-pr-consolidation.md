@@ -11,7 +11,8 @@ performance changes into safe, reviewable fixes. Code quality and stability
 take priority over accepting every optimization PR.
 
 No GitHub write actions were taken while creating this document: no comments,
-thread resolutions, merges, branch deletes, or PR closes.
+thread resolutions, merges, branch deletes, or PR closes. Later GitHub cleanup
+actions are recorded below.
 
 ## Live PR Inventory
 
@@ -27,6 +28,25 @@ thread resolutions, merges, branch deletes, or PR closes.
 | [#37](https://github.com/kingdomseed/icloud_storage_plus/pull/37) | `perf-move-delete-to-bg-queue-4686768747889599894` | clean | 3 | 6 open current threads | Duplicate delete work; still drops coordinator errors. |
 | [#38](https://github.com/kingdomseed/icloud_storage_plus/pull/38) | `perf-cache-container-path-9742097589616377049` | clean | 3 | 6 open current threads | Plausible, but overlaps mapping work; keep only if folded into one code-only mapping PR. |
 | [#39](https://github.com/kingdomseed/icloud_storage_plus/pull/39) | `jules/performance-optimization-startdownloading-14467599079261901492` | clean | 5 | 7 open current threads | Promising but needs cancellation/order review before adoption. |
+
+## GitHub Cleanup Log
+
+Cleanup run: 2026-05-13 10:43:48 CEST.
+
+Closed as superseded by the coordinator-safety consolidation branch:
+
+- [#30](https://github.com/kingdomseed/icloud_storage_plus/pull/30):
+  coordinated move off-main-thread PR.
+- [#31](https://github.com/kingdomseed/icloud_storage_plus/pull/31):
+  coordinated delete off-main-thread PR.
+- [#36](https://github.com/kingdomseed/icloud_storage_plus/pull/36):
+  macOS coordinated move off-main-thread PR.
+- [#37](https://github.com/kingdomseed/icloud_storage_plus/pull/37):
+  duplicate coordinated delete off-main-thread PR.
+
+Remaining open bot PRs after cleanup: #32, #33, #34, #35, #38, #39. These stay
+open until their metadata, mapping, Dart micro-optimization, and
+download-start buckets are either consolidated or explicitly rejected.
 
 ## Comment And Thread Snapshot
 
@@ -229,7 +249,10 @@ Validation notes:
       them.
 - [ ] Decide whether #35's Dart micro-optimization is worth carrying.
 - [ ] Review #39 download-start offload after coordinator safety is stable.
-- [ ] Close or supersede duplicate bot PRs only after explicit approval.
+- [x] Close superseded coordinator bot PRs #30, #31, #36, and #37 after
+      explicit approval.
+- [ ] Close or supersede remaining bot PRs only after their buckets are no
+      longer needed.
 
 ## Open Questions
 
