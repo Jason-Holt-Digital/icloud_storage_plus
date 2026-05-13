@@ -1,0 +1,241 @@
+# Open PR Consolidation Plan
+
+Snapshot: 2026-05-13 10:29:46 CEST
+
+Repository: `kingdomseed/icloud_storage_plus`
+
+## Goal
+
+Capture the live open PR review state and consolidate overlapping bot-sourced
+performance changes into safe, reviewable fixes. Code quality and stability
+take priority over accepting every optimization PR.
+
+No GitHub write actions were taken while creating this document: no comments,
+thread resolutions, merges, branch deletes, or PR closes.
+
+## Live PR Inventory
+
+| PR | Branch | Status | Files | Review state | Initial verdict |
+|---|---|---:|---:|---|---|
+| [#30](https://github.com/kingdomseed/icloud_storage_plus/pull/30) | `perf/async-file-coordinator-move-4299254270788686612` | clean | 3 | 9 open current threads | Do not merge as-is; carry forward move idea only with coordinator errors handled. |
+| [#31](https://github.com/kingdomseed/icloud_storage_plus/pull/31) | `performance-async-file-coordinator-delete-16154369131399113602` | clean | 4 | 13 open current threads | Do not merge as-is; duplicate delete work with P1 coordinator-error and path-escape concerns. |
+| [#32](https://github.com/kingdomseed/icloud_storage_plus/pull/32) | `perf/async-getdocumentmetadata-1773966710348158229` | clean | 3 | 4 open current threads | Candidate after removing root benchmark artifact and deciding whether `documentExists` is in scope. |
+| [#33](https://github.com/kingdomseed/icloud_storage_plus/pull/33) | `optimize-map-file-attributes-5374875045378659345` | clean | 3 | 7 open current threads | Candidate only as part of mapping consolidation; remove benchmark script and soften benchmark claims. |
+| [#34](https://github.com/kingdomseed/icloud_storage_plus/pull/34) | `perf-optimize-nsmetadataquery-loops-33357472296089754` | clean | 4 | 8 open current threads | Do not merge as-is; contains macOS query-cancel ordering regression and root benchmark artifacts. |
+| [#35](https://github.com/kingdomseed/icloud_storage_plus/pull/35) | `perf-dart-iteration-4503915023291417995` | clean | 1 | 5 open current threads | Low-value micro-optimization; if kept, preserve mutable empty lists. |
+| [#36](https://github.com/kingdomseed/icloud_storage_plus/pull/36) | `performance/non-blocking-move-coordination-7117363535050450245` | clean | 2 | 5 open current threads | Better macOS move error handling, but incomplete platform/method coverage and possible queue reentrancy concern. |
+| [#37](https://github.com/kingdomseed/icloud_storage_plus/pull/37) | `perf-move-delete-to-bg-queue-4686768747889599894` | clean | 3 | 6 open current threads | Duplicate delete work; still drops coordinator errors. |
+| [#38](https://github.com/kingdomseed/icloud_storage_plus/pull/38) | `perf-cache-container-path-9742097589616377049` | clean | 3 | 6 open current threads | Plausible, but overlaps mapping work; keep only if folded into one code-only mapping PR. |
+| [#39](https://github.com/kingdomseed/icloud_storage_plus/pull/39) | `jules/performance-optimization-startdownloading-14467599079261901492` | clean | 5 | 7 open current threads | Promising but needs cancellation/order review before adoption. |
+
+## Comment And Thread Snapshot
+
+| PR | Conversation comments | Reviews | Review threads | Current open threads | Latest comment/review update |
+|---|---:|---:|---:|---:|---|
+| [#30](https://github.com/kingdomseed/icloud_storage_plus/pull/30) | 3 | 4 | 9 | 9 | 2026-05-13T07:51:47Z |
+| [#31](https://github.com/kingdomseed/icloud_storage_plus/pull/31) | 3 | 4 | 13 | 13 | 2026-05-13T07:59:52Z |
+| [#32](https://github.com/kingdomseed/icloud_storage_plus/pull/32) | 3 | 3 | 4 | 4 | 2026-05-13T07:51:03Z |
+| [#33](https://github.com/kingdomseed/icloud_storage_plus/pull/33) | 3 | 3 | 7 | 7 | 2026-05-13T07:58:39Z |
+| [#34](https://github.com/kingdomseed/icloud_storage_plus/pull/34) | 3 | 3 | 8 | 8 | 2026-05-13T07:56:15Z |
+| [#35](https://github.com/kingdomseed/icloud_storage_plus/pull/35) | 3 | 4 | 5 | 5 | 2026-05-13T08:01:50Z |
+| [#36](https://github.com/kingdomseed/icloud_storage_plus/pull/36) | 3 | 3 | 5 | 5 | 2026-05-13T08:02:37Z |
+| [#37](https://github.com/kingdomseed/icloud_storage_plus/pull/37) | 3 | 3 | 6 | 6 | 2026-05-13T08:05:30Z |
+| [#38](https://github.com/kingdomseed/icloud_storage_plus/pull/38) | 3 | 3 | 6 | 6 | 2026-05-13T08:09:35Z |
+| [#39](https://github.com/kingdomseed/icloud_storage_plus/pull/39) | 3 | 4 | 7 | 7 | 2026-05-13T08:19:14Z |
+
+## Consolidated Review Themes
+
+### 1. Coordinator Failure Hangs Are The Highest-Risk Issue
+
+Affected PRs: #30, #31, #36, #37.
+
+Multiple reviewers independently flagged the same failure mode:
+`NSFileCoordinator.coordinate(...)` can fail before executing the accessor
+block. PRs that pass `error: nil` discard that failure, so the only
+`FlutterResult` calls are skipped and the Dart `Future` can hang indefinitely.
+
+Actionable requirements:
+
+- Use `NSError?` out-parameters for coordinated delete and move on both iOS and
+  macOS.
+- Ensure every method path calls `FlutterResult` exactly once.
+- Dispatch native file coordination off the main thread without making
+  coordinated move/delete operations reentrant in unsafe ways.
+- Preserve existing typed native error mapping.
+
+Related non-blocking concerns:
+
+- #31 and #37 delete PRs still leave move/copy on the main thread.
+- #30 move PR still leaves delete/copy on the main thread.
+- #36 fixes only macOS move and leaves iOS parity unresolved.
+
+### 2. Path Escape Validation Needs Explicit Treatment
+
+Affected PRs: #31 and likely the broader delete/move/copy family.
+
+Factory Droid flagged that `relativePath` is appended to `containerURL` and
+then deleted without proving the resolved URL remains under the iCloud
+container. The Dart layer validates relative paths, but native APIs can still
+be invoked directly through method channels, so native-side containment is a
+stability/security consideration.
+
+Actionable requirement:
+
+- Add or reuse a native helper that resolves/standardizes a child URL and
+  rejects paths outside the container before destructive operations.
+
+### 3. Benchmark Artifacts Should Not Ship
+
+Affected PRs: #31, #32, #33, #34, and docs in #30, #31, #33, #36, #37, #38,
+#39.
+
+Reviewers found root or script benchmark artifacts that are not part of the
+plugin test infrastructure:
+
+- `test_perf.swift`
+- `benchmark.swift`
+- `benchmark_results.md`
+- `scripts/benchmark_delete.swift`
+- `scripts/benchmark_map_file_attributes.swift`
+
+Actionable requirements:
+
+- Do not merge standalone benchmark files from these PRs.
+- If benchmark notes are kept, keep them in docs only and avoid strict claims
+  such as "guaranteed", "infinite percentage improvement", or measured output
+  that was not actually measured in this environment.
+
+### 4. Metadata Query Mapping Optimizations Overlap
+
+Affected PRs: #33, #34, #38.
+
+There are three overlapping attempts to reduce allocations while mapping
+metadata results.
+
+Important findings:
+
+- #33's iOS single-pass refactor is mostly behavior-preserving, with a line
+  length issue and benchmark/documentation caveats.
+- #34 adds macOS parity but introduces a P1 regression: the one-shot macOS path
+  can cancel the metadata query before safely mapping or snapshotting results.
+- #34 weakens a private type boundary from `[NSMetadataItem]` to `[Any]`.
+- #38 caches container path normalization data and is likely safe, but its
+  duplicated private struct and misplaced doc comment should be cleaned up if
+  adopted.
+
+Actionable requirement:
+
+- Create one mapping consolidation change, not three PR merges.
+- Preserve the macOS one-shot ordering: snapshot/map results before canceling
+  the metadata query session.
+- Keep private method signatures typed where possible.
+- Keep code-only improvements separate from benchmark notes.
+
+### 5. Dart GatherResult Mutability Regression Is Small But Real
+
+Affected PR: #35.
+
+Returning `const GatherResult(files: [], invalidEntries: [])` creates
+unmodifiable lists only for the null-input path, while the normal path returns
+growable lists. Reviewers flagged that as an inconsistent behavioral surface.
+
+Actionable requirement:
+
+- If the null early return is kept, return
+  `GatherResult(files: [], invalidEntries: [])` instead of a const instance.
+- Given the optimization value is tiny, it is reasonable to skip #35 entirely.
+
+### 6. `startDownloadingUbiquitousItem` Offload Needs Careful Ordering
+
+Affected PR: #39.
+
+The idea is valuable: `FileManager.default.startDownloadingUbiquitousItem(at:)`
+can block and should not run on the main actor in request paths. Reviewers
+flagged ordering and cancellation concerns:
+
+- `downloadFile` now awaits a detached task before setting up metadata query
+  cancellation handling.
+- `liveEnsureDownloaded` still does synchronous `resourceValues(forKeys:)`
+  before the detached download-start hop.
+- Indentation drift makes the changed control flow harder to review.
+
+Actionable requirement:
+
+- Keep cancellation handlers and completion gates established before any
+  awaited download-start work.
+- Treat write-path helper changes separately because they affect existing
+  conflict/download semantics.
+
+## Recommended Consolidation Order
+
+1. Coordinator safety for delete and move on iOS/macOS.
+2. Native containment validation for destructive operations.
+3. Metadata/get-document off-main-thread cleanup, without benchmark files.
+4. Metadata mapping/path-cache consolidation, preserving macOS query ordering.
+5. Consider or drop the Dart list iteration micro-optimization.
+6. Review `startDownloadingUbiquitousItem` offload after the coordinator work is
+   stable.
+
+## Active Consolidation Plan
+
+### Phase 1: Discovery
+
+- [x] Refresh open PR list from GitHub.
+- [x] Fetch thread-aware review data for open PRs.
+- [x] Cluster duplicate review findings by behavior area.
+- [x] Record findings in this durable document.
+
+### Phase 2: Coordinator Safety Consolidation
+
+- [x] Create scoped branch `codex/open-pr-coordinator-consolidation`.
+- [x] Add a native helper or local pattern for off-main coordinated writes that
+      captures coordinator errors.
+- [x] Update iOS delete.
+- [x] Update macOS delete.
+- [x] Update iOS move.
+- [x] Update macOS move.
+- [x] Ensure `FlutterResult` completes exactly once.
+- [x] Avoid benchmark/doc churn from source PRs.
+
+### Phase 3: Validation
+
+- [x] Run Dart tests.
+- [x] Run Flutter analyzer.
+- [x] Run available Swift/SPM tests for shared foundation code.
+- [x] Compile the example app against the edited Swift plugin files.
+- [ ] Re-check review thread state after pushing, if this becomes a PR update.
+
+Validation notes:
+
+- `flutter test`: passed, 127 tests.
+- `flutter analyze`: passed, no issues.
+- `swift test` in `ios/icloud_storage_plus/Sources/icloud_storage_plus_foundation`:
+  passed, 52 tests.
+- `swift test` in
+  `macos/icloud_storage_plus/Sources/icloud_storage_plus_foundation`: passed, 54
+  tests.
+- `flutter build macos`: blocked by the example Runner's local iCloud
+  provisioning profile requirement before code compilation completed.
+- `xcodebuild` macOS Debug build with code signing disabled: passed and compiled
+  `macOSICloudStoragePlugin.swift`.
+- `xcodebuild` iOS simulator Debug build with code signing disabled: passed and
+  compiled `iOSICloudStoragePlugin.swift`. Xcode emitted stale-file warnings for
+  existing build products, but no compiler errors.
+
+### Phase 4: Remaining PR Buckets
+
+- [ ] Decide whether to carry #32 metadata I/O off-main-thread changes.
+- [ ] Consolidate #33/#34/#38 mapping/path-cache changes or explicitly skip
+      them.
+- [ ] Decide whether #35's Dart micro-optimization is worth carrying.
+- [ ] Review #39 download-start offload after coordinator safety is stable.
+- [ ] Close or supersede duplicate bot PRs only after explicit approval.
+
+## Open Questions
+
+1. Should native containment checks be included in the first coordinator-safety
+   branch, or should they be a second security-focused branch?
+2. Should copy coordination also be moved off-main now, or deferred until
+   move/delete are stable?
+3. Should benchmark docs be removed entirely from `BENCHMARK.md`, or rewritten
+   as a short qualitative note after validated code lands?
