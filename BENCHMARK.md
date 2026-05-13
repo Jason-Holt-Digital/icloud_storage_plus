@@ -102,3 +102,17 @@ directory-enumeration loop was removed:
 - `mapFileAttributesFromQuery(query:containerURL:)` (Implementation updated)
 - `getDocumentMetadata` (Implementation updated)
 - `listContents` (Loop optimized in both iOS and macOS plugins)
+
+# Performance Optimization: Asynchronous File Coordination
+
+## Issue
+In the `delete` method, `NSFileCoordinator` operations were being executed synchronously on the main thread because the calling context `resolveContainerURL` dispatches its completion handler on the `MainActor`. Synchronous filesystem operations, especially coordinated ones which involve IPC and locking, can block the main thread and cause UI freezing or hitches.
+
+## Optimization
+We moved the `NSFileCoordinator` operations inside `delete` to a background thread using `DispatchQueue.global(qos: .userInitiated).async`. The result is safely dispatched back to the main thread via `DispatchQueue.main.async` to ensure compatibility with Flutter channel expectations. This optimization was applied to both the iOS and macOS plugin implementations.
+
+## Performance Impact
+This change significantly improves main thread responsiveness by eliminating the UI block that previously occurred while waiting for the file coordinator lock and filesystem modification.
+
+## Micro-benchmark Simulation
+Since `NSFileCoordinator` blocking is highly dependent on system load and other processes accessing the same files, a micro-benchmark won't provide a consistent ms value. However, any operation taking >16ms on the main thread causes a dropped frame. By moving this file coordination (which typically takes several to tens of milliseconds) to a background thread, we avoid dropping frames and preserve a smooth 60fps UI.
