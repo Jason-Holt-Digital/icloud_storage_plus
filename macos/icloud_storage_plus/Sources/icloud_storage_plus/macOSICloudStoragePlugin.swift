@@ -1377,32 +1377,52 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
       }
 
       let toURL = containerURL.appendingPathComponent(toRelativePath)
-      let fileCoordinator = NSFileCoordinator(filePresenter: nil)
-      fileCoordinator.coordinate(
-        writingItemAt: atURL,
-        options: NSFileCoordinator.WritingOptions.forMoving,
-        writingItemAt: toURL,
-        options: NSFileCoordinator.WritingOptions.forReplacing,
-        error: nil
-      ) { atWritingURL, toWritingURL in
-        do {
-          let toDirURL = toWritingURL.deletingLastPathComponent()
-          if !FileManager.default.fileExists(atPath: toDirURL.path) {
-            try FileManager.default.createDirectory(
-              at: toDirURL,
-              withIntermediateDirectories: true,
-              attributes: nil
-            )
+
+      DispatchQueue.global(qos: .userInitiated).async {
+        let fileCoordinator = NSFileCoordinator(filePresenter: nil)
+        var coordinationError: NSError?
+
+        fileCoordinator.coordinate(
+          writingItemAt: atURL,
+          options: NSFileCoordinator.WritingOptions.forMoving,
+          writingItemAt: toURL,
+          options: NSFileCoordinator.WritingOptions.forReplacing,
+          error: &coordinationError
+        ) { atWritingURL, toWritingURL in
+          do {
+            let toDirURL = toWritingURL.deletingLastPathComponent()
+            if !FileManager.default.fileExists(atPath: toDirURL.path) {
+              try FileManager.default.createDirectory(
+                at: toDirURL,
+                withIntermediateDirectories: true,
+                attributes: nil
+              )
+            }
+            try FileManager.default.moveItem(at: atWritingURL, to: toWritingURL)
+            DispatchQueue.main.async {
+              result(nil)
+            }
+          } catch {
+            DebugHelper.log("error: \(error.localizedDescription)")
+            DispatchQueue.main.async {
+              result(self.nativeCodeError(
+                error,
+                operation: "move",
+                relativePath: atRelativePath
+              ))
+            }
           }
-          try FileManager.default.moveItem(at: atWritingURL, to: toWritingURL)
-          result(nil)
-        } catch {
-          DebugHelper.log("error: \(error.localizedDescription)")
-          result(nativeCodeError(
-            error,
-            operation: "move",
-            relativePath: atRelativePath
-          ))
+        }
+
+        if let coordinationError = coordinationError {
+          DebugHelper.log("move coordination error: \(coordinationError.localizedDescription)")
+          DispatchQueue.main.async {
+            result(self.nativeCodeError(
+              coordinationError,
+              operation: "move",
+              relativePath: atRelativePath
+            ))
+          }
         }
       }
     }
