@@ -1361,27 +1361,29 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
         return
       }
 
-      let fileCoordinator = NSFileCoordinator(filePresenter: nil)
-      fileCoordinator.coordinate(
-        writingItemAt: fileURL,
-        options: NSFileCoordinator.WritingOptions.forDeleting,
-        error: nil
-      ) { writingURL in
-        do {
-          try FileManager.default.removeItem(at: writingURL)
-          result(nil)
-        } catch {
-          DebugHelper.log("error: \(error.localizedDescription)")
-          let mapped = mapFileNotFoundError(
-            error,
-            operation: "delete",
-            relativePath: relativePath
-          ) ?? nativeCodeError(
-            error,
-            operation: "delete",
-            relativePath: relativePath
-          )
-          result(mapped)
+      DispatchQueue.global(qos: .userInitiated).async {
+        let fileCoordinator = NSFileCoordinator(filePresenter: nil)
+        fileCoordinator.coordinate(
+          writingItemAt: fileURL,
+          options: NSFileCoordinator.WritingOptions.forDeleting,
+          error: nil
+        ) { writingURL in
+          do {
+            try FileManager.default.removeItem(at: writingURL)
+            DispatchQueue.main.async { result(nil) }
+          } catch {
+            DebugHelper.log("error: \(error.localizedDescription)")
+            let mapped = self.mapFileNotFoundError(
+              error,
+              operation: "delete",
+              relativePath: relativePath
+            ) ?? self.nativeCodeError(
+              error,
+              operation: "delete",
+              relativePath: relativePath
+            )
+            DispatchQueue.main.async { result(mapped) }
+          }
         }
       }
     }

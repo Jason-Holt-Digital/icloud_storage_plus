@@ -102,3 +102,52 @@ directory-enumeration loop was removed:
 - `mapFileAttributesFromQuery(query:containerURL:)` (Implementation updated)
 - `getDocumentMetadata` (Implementation updated)
 - `listContents` (Loop optimized in both iOS and macOS plugins)
+
+## Performance Optimization: Non-blocking NSFileCoordinator operations
+
+## Issue
+Synchronous operations such as `NSFileCoordinator.coordinate(writingItemAt:options:error:byAccessor:)` block the thread they are called on while waiting for access to the specified file. When called on the MainActor (main thread), this can lead to UI stutters or complete freezes, especially if the file is being downloaded from iCloud, is locked by another process, or involves high I/O latency.
+
+In our case, the `delete` method was executing its file coordination block directly on the main thread, leading to potential UI blocking.
+
+## Optimization
+We moved the `NSFileCoordinator` invocation and the actual file removal operation to a background queue (`DispatchQueue.global(qos: .userInitiated)`). The `FlutterResult` callback is then dispatched back to the main queue to ensure thread safety when communicating with the Flutter framework.
+
+## Performance Impact
+This optimization reduces the main thread block time from the latency of file coordination + I/O operation (which could be hundreds of milliseconds or even seconds in case of iCloud synchronization waits) to approximately 0 ms (just the dispatch overhead). This vastly improves the responsiveness of the Flutter application's UI when initiating file deletions.
+
+## Micro-benchmark (optional)
+To demonstrate the UI unblocking effect, here is a conceptual Swift snippet that simulates file coordination blocking.
+
+```swift
+import Foundation
+
+func performDeleteSynchronously(fileURL: URL, completion: @escaping () -> Void) {
+    let coordinator = NSFileCoordinator(filePresenter: nil)
+    // Blocks the current thread
+    coordinator.coordinate(writingItemAt: fileURL, options: .forDeleting, error: nil) { url in
+        // Simulate I/O latency
+        Thread.sleep(forTimeInterval: 0.5)
+        completion()
+    }
+}
+
+func performDeleteAsynchronously(fileURL: URL, completion: @escaping () -> Void) {
+    DispatchQueue.global(qos: .userInitiated).async {
+        let coordinator = NSFileCoordinator(filePresenter: nil)
+        coordinator.coordinate(writingItemAt: fileURL, options: .forDeleting, error: nil) { url in
+            // Simulate I/O latency
+            Thread.sleep(forTimeInterval: 0.5)
+            DispatchQueue.main.async {
+                completion()
+            }
+        }
+    }
+}
+
+// In a UI application, calling performDeleteSynchronously would freeze the UI for > 0.5 seconds.
+// Calling performDeleteAsynchronously returns immediately, allowing 60fps scrolling to continue.
+```
+
+## Affected Methods
+- `delete` (in both iOS and macOS plugins)
