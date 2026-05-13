@@ -213,12 +213,11 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
           query.enableUpdates()
         }
       }
-      let results = query.results.compactMap { $0 as? NSMetadataItem }
       if eventChannelName.isEmpty {
         session.cancel()
       }
 
-      let files = mapFileAttributes(items: results, containerURL: containerURL)
+      let files = mapFileAttributes(results: query.results, containerURL: containerURL)
       DispatchQueue.main.async {
         result(files)
       }
@@ -239,8 +238,7 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
             query.enableUpdates()
           }
         }
-        let results = query.results.compactMap { $0 as? NSMetadataItem }
-        let files = mapFileAttributes(items: results, containerURL: containerURL)
+        let files = mapFileAttributes(results: query.results, containerURL: containerURL)
         DispatchQueue.main.async {
           guard let streamHandler = self.registeredStreamHandler(
             for: eventChannelName
@@ -254,16 +252,12 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
   }
   
   /// Maps query results into metadata dictionaries.
-  private func mapFileAttributes(items: [NSMetadataItem], containerURL: URL) -> [[String: Any?]] {
-    var fileMaps: [[String: Any?]] = []
+  private func mapFileAttributes(results: [Any], containerURL: URL) -> [[String: Any?]] {
     let containerPath = containerURL.standardizedFileURL.path
-    for item in items {
-      guard let map = mapMetadataItem(item, containerPath: containerPath) else {
-        continue
-      }
-      fileMaps.append(map)
+    return results.compactMap { item -> [String: Any?]? in
+      guard let metadataItem = item as? NSMetadataItem else { return nil }
+      return mapMetadataItem(metadataItem, containerPath: containerPath)
     }
-    return fileMaps
   }
 
   /// Map an NSMetadataItem into a Flutter-friendly metadata dictionary.

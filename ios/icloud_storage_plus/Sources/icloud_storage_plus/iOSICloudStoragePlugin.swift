@@ -266,16 +266,12 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
   
   /// Maps query results into metadata dictionaries.
   private func mapFileAttributesFromQuery(query: NSMetadataQuery, containerURL: URL) -> [[String: Any?]] {
-    var fileMaps: [[String: Any?]] = []
-    let pendingItems = query.results.compactMap { item -> PendingQueryItem? in
-      guard let fileItem = item as? NSMetadataItem else { return nil }
-      return extractPendingItem(from: fileItem)
-    }
     let containerPath = containerURL.standardizedFileURL.path
-    for item in pendingItems {
-      fileMaps.append(mapPendingItem(item, containerPath: containerPath))
+    return query.results.compactMap { item -> [String: Any?]? in
+      guard let fileItem = item as? NSMetadataItem else { return nil }
+      guard let pendingItem = extractPendingItem(from: fileItem) else { return nil }
+      return mapPendingItem(pendingItem, containerPath: containerPath)
     }
-    return fileMaps
   }
 
   private struct PendingQueryItem {
