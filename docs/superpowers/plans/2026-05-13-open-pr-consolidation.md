@@ -48,6 +48,26 @@ Remaining open bot PRs after cleanup: #32, #33, #34, #35, #38, #39. These stay
 open until their metadata, mapping, Dart micro-optimization, and
 download-start buckets are either consolidated or explicitly rejected.
 
+Cleanup run: 2026-05-17 21:35:57 CEST.
+
+Closed the remaining bot PRs after their requested changes were captured in
+this plan and the repo cleanup work moved to the consolidation branch:
+
+- [#32](https://github.com/kingdomseed/icloud_storage_plus/pull/32):
+  metadata I/O off-main-thread PR.
+- [#33](https://github.com/kingdomseed/icloud_storage_plus/pull/33):
+  file attribute mapping allocation PR.
+- [#34](https://github.com/kingdomseed/icloud_storage_plus/pull/34):
+  metadata query loop optimization PR.
+- [#35](https://github.com/kingdomseed/icloud_storage_plus/pull/35):
+  Dart list iteration micro-optimization PR.
+- [#38](https://github.com/kingdomseed/icloud_storage_plus/pull/38):
+  container path cache PR.
+- [#39](https://github.com/kingdomseed/icloud_storage_plus/pull/39):
+  `startDownloadingUbiquitousItem` off-main-thread PR.
+
+Remaining open PRs after cleanup: none.
+
 ## Comment And Thread Snapshot
 
 | PR | Conversation comments | Reviews | Review threads | Current open threads | Latest comment/review update |
@@ -251,8 +271,8 @@ Validation notes:
 - [ ] Review #39 download-start offload after coordinator safety is stable.
 - [x] Close superseded coordinator bot PRs #30, #31, #36, and #37 after
       explicit approval.
-- [ ] Close or supersede remaining bot PRs only after their buckets are no
-      longer needed.
+- [x] Close or supersede remaining bot PRs after their buckets were captured in
+      this plan and moved out of standalone bot PR review.
 
 ## Open Questions
 
