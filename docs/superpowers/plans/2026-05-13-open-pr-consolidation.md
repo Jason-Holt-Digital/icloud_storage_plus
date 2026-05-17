@@ -85,6 +85,35 @@ Remaining open PRs after cleanup: none.
 
 ## Consolidated Review Themes
 
+## Capture Audit
+
+Audit run: 2026-05-17.
+
+The major requested changes from PRs #30-#39 are captured in the sections
+below. This follow-up audit added the smaller items that were present in review
+threads but were previously compressed into broader buckets:
+
+- Treat `fileExists` checks around coordinated delete/move as race-prone
+  preflight checks. The implementation must still map file-not-found errors
+  from inside the coordinated accessor instead of relying only on a pre-check.
+- If moving more `NSFileCoordinator` calls off-main, prefer a serial
+  coordinator queue over a global concurrent queue to avoid reentrant
+  overlapping coordination work.
+- Do not reuse bot benchmark claims without validating the benchmark itself.
+  Reviewers flagged silent setup failures, non-representative stubs, warm-up
+  bias, unused parameters, and broken Swift string interpolation in addition to
+  the files being stray artifacts.
+- For metadata I/O off-main-thread work, decide explicitly whether
+  `documentExists` belongs in the same scope as `getDocumentMetadata`.
+- For path-cache work, avoid spreading helper allocations into non-loop call
+  sites where they do not buy much, and keep comments attached to the functions
+  they document.
+- For download-start offload work, cover both iOS and macOS cancellation-window
+  comments and clean up the indentation/control-flow drift before review.
+
+No review thread found during this audit requires reopening the closed bot PRs;
+the information needed for follow-up work is in this document.
+
 ### 1. Coordinator Failure Hangs Are The Highest-Risk Issue
 
 Affected PRs: #30, #31, #36, #37.
