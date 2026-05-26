@@ -3,6 +3,15 @@ import XCTest
 @testable import icloud_storage_plus_foundation
 
 final class MetadataQuerySessionTests: XCTestCase {
+    func testCompletionGateCompletesOnlyOnce() {
+        let gate = CompletionGate()
+
+        XCTAssertFalse(gate.isCompleted)
+        XCTAssertTrue(gate.tryComplete())
+        XCTAssertTrue(gate.isCompleted)
+        XCTAssertFalse(gate.tryComplete())
+    }
+
     func testCancelRemovesObserversAndRunsCleanupOnce() {
         let query = NSMetadataQuery()
         let notificationName = Notification.Name(

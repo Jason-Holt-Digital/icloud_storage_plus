@@ -27,7 +27,7 @@ actions are recorded below.
 | [#36](https://github.com/kingdomseed/icloud_storage_plus/pull/36) | `performance/non-blocking-move-coordination-7117363535050450245` | clean | 2 | 5 open current threads | Better macOS move error handling, but incomplete platform/method coverage and possible queue reentrancy concern. |
 | [#37](https://github.com/kingdomseed/icloud_storage_plus/pull/37) | `perf-move-delete-to-bg-queue-4686768747889599894` | clean | 3 | 6 open current threads | Duplicate delete work; still drops coordinator errors. |
 | [#38](https://github.com/kingdomseed/icloud_storage_plus/pull/38) | `perf-cache-container-path-9742097589616377049` | clean | 3 | 6 open current threads | Plausible, but overlaps mapping work; keep only if folded into one code-only mapping PR. |
-| [#39](https://github.com/kingdomseed/icloud_storage_plus/pull/39) | `jules/performance-optimization-startdownloading-14467599079261901492` | clean | 5 | 7 open current threads | Promising but needs cancellation/order review before adoption. |
+| [#39](https://github.com/kingdomseed/icloud_storage_plus/pull/39) | `jules/performance-optimization-startdownloading-14467599079261901492` | clean | 5 | 7 open current threads | Closed; do not carry forward as plugin-owned iCloud readiness work. |
 
 ## GitHub Cleanup Log
 
@@ -108,8 +108,8 @@ threads but were previously compressed into broader buckets:
 - For path-cache work, avoid spreading helper allocations into non-loop call
   sites where they do not buy much, and keep comments attached to the functions
   they document.
-- For download-start offload work, cover both iOS and macOS cancellation-window
-  comments and clean up the indentation/control-flow drift before review.
+- The download-start offload bucket was later rejected; do not carry it forward
+  as plugin-owned iCloud readiness work.
 
 No review thread found during this audit requires reopening the closed bot PRs;
 the information needed for follow-up work is in this document.
@@ -214,26 +214,18 @@ Actionable requirement:
   `GatherResult(files: [], invalidEntries: [])` instead of a const instance.
 - Given the optimization value is tiny, it is reasonable to skip #35 entirely.
 
-### 6. `startDownloadingUbiquitousItem` Offload Needs Careful Ordering
+### 6. Download-Start Offload PR Was Rejected
 
 Affected PR: #39.
 
-The idea is valuable: `FileManager.default.startDownloadingUbiquitousItem(at:)`
-can block and should not run on the main actor in request paths. Reviewers
-flagged ordering and cancellation concerns:
+This bucket is closed. Do not revive the PR's write-helper work as a plugin
+readiness layer. iCloud Drive materialization belongs to Apple; this plugin
+should not build a wait-for-freshness or wait-for-localization protocol around
+that lifecycle.
 
-- `downloadFile` now awaits a detached task before setting up metadata query
-  cancellation handling.
-- `liveEnsureDownloaded` still does synchronous `resourceValues(forKeys:)`
-  before the detached download-start hop.
-- Indentation drift makes the changed control flow harder to review.
-
-Actionable requirement:
-
-- Keep cancellation handlers and completion gates established before any
-  awaited download-start work.
-- Treat write-path helper changes separately because they affect existing
-  conflict/download semantics.
+`startDownloadingUbiquitousItem(at:)` remains appropriate only as an explicit
+Apple materialization request for transfer-style APIs. It must not become a
+custom timeout, retry, or status contract in this plugin.
 
 ## Recommended Consolidation Order
 
@@ -242,8 +234,7 @@ Actionable requirement:
 3. Metadata/get-document off-main-thread cleanup, without benchmark files.
 4. Metadata mapping/path-cache consolidation, preserving macOS query ordering.
 5. Consider or drop the Dart list iteration micro-optimization.
-6. Review `startDownloadingUbiquitousItem` offload after the coordinator work is
-   stable.
+6. Do not carry #39's download-start offload into this consolidation.
 
 ## Active Consolidation Plan
 
@@ -297,7 +288,8 @@ Validation notes:
 - [ ] Consolidate #33/#34/#38 mapping/path-cache changes or explicitly skip
       them.
 - [ ] Decide whether #35's Dart micro-optimization is worth carrying.
-- [ ] Review #39 download-start offload after coordinator safety is stable.
+- [x] Reject #39 download-start offload as superseded by the local iCloud Drive
+      responsibility boundary.
 - [x] Close superseded coordinator bot PRs #30, #31, #36, and #37 after
       explicit approval.
 - [x] Close or supersede remaining bot PRs after their buckets were captured in

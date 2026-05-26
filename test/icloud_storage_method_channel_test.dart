@@ -222,34 +222,6 @@ void main() {
       expect(eventChannelName, isNotNull);
       expect(eventChannelName, isNotEmpty);
     });
-
-    test('uploadFile maps structured timeout payloads', () async {
-      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-          .setMockMethodCallHandler(channel, (methodCall) async {
-        if (methodCall.method == 'uploadFile') {
-          throw PlatformException(
-            code: PlatformExceptionCode.timeout,
-            message: 'Timed out',
-            details: {
-              'category': 'timeout',
-              'operation': 'uploadFile',
-              'retryable': true,
-              'relativePath': 'dest',
-            },
-          );
-        }
-        return null;
-      });
-
-      await expectLater(
-        () => platform.uploadFile(
-          containerId: containerId,
-          localPath: '/dir/file',
-          cloudRelativePath: 'dest',
-        ),
-        throwsA(isA<ICloudTimeoutException>()),
-      );
-    });
   });
 
   group('downloadFile tests:', () {
@@ -291,25 +263,6 @@ void main() {
       expect(args['relativePath'], 'Documents/test.json');
       expect(result, 'contents');
     });
-
-    test('passes idle timeout and retry backoff settings', () async {
-      await platform.readInPlace(
-        containerId: containerId,
-        relativePath: 'Documents/test.json',
-        idleTimeouts: const [
-          Duration(seconds: 60),
-          Duration(seconds: 90),
-          Duration(seconds: 180),
-        ],
-        retryBackoff: const [
-          Duration(seconds: 2),
-          Duration(seconds: 4),
-        ],
-      );
-      final args = mockArguments();
-      expect(args['idleTimeoutSeconds'], [60, 90, 180]);
-      expect(args['retryBackoffSeconds'], [2, 4]);
-    });
   });
 
   group('readInPlaceBytes tests:', () {
@@ -322,25 +275,6 @@ void main() {
       expect(args['containerId'], containerId);
       expect(args['relativePath'], 'Documents/data.bin');
       expect(result, Uint8List.fromList([1, 2, 3]));
-    });
-
-    test('passes idle timeout and retry backoff settings', () async {
-      await platform.readInPlaceBytes(
-        containerId: containerId,
-        relativePath: 'Documents/data.bin',
-        idleTimeouts: const [
-          Duration(seconds: 60),
-          Duration(seconds: 90),
-          Duration(seconds: 180),
-        ],
-        retryBackoff: const [
-          Duration(seconds: 2),
-          Duration(seconds: 4),
-        ],
-      );
-      final args = mockArguments();
-      expect(args['idleTimeoutSeconds'], [60, 90, 180]);
-      expect(args['retryBackoffSeconds'], [2, 4]);
     });
   });
 
@@ -355,34 +289,6 @@ void main() {
       expect(args['containerId'], containerId);
       expect(args['relativePath'], 'Documents/test.json');
       expect(args['contents'], '{"ok":true}');
-    });
-
-    test('writeInPlace maps structured timeout payloads', () async {
-      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-          .setMockMethodCallHandler(channel, (methodCall) async {
-        if (methodCall.method == 'writeInPlace') {
-          throw PlatformException(
-            code: PlatformExceptionCode.timeout,
-            message: 'Timed out',
-            details: {
-              'category': 'timeout',
-              'operation': 'writeInPlace',
-              'retryable': true,
-              'relativePath': 'Documents/test.json',
-            },
-          );
-        }
-        return null;
-      });
-
-      await expectLater(
-        () => platform.writeInPlace(
-          containerId: containerId,
-          relativePath: 'Documents/test.json',
-          contents: '{"ok":true}',
-        ),
-        throwsA(isA<ICloudTimeoutException>()),
-      );
     });
 
     test('writeInPlace maps structured invalidArgument payloads', () async {
@@ -475,34 +381,6 @@ void main() {
       expect(args['containerId'], containerId);
       expect(args['relativePath'], 'Documents/data.bin');
       expect(args['contents'], Uint8List.fromList([4, 5, 6]));
-    });
-
-    test('writeInPlaceBytes maps structured timeout payloads', () async {
-      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-          .setMockMethodCallHandler(channel, (methodCall) async {
-        if (methodCall.method == 'writeInPlaceBytes') {
-          throw PlatformException(
-            code: PlatformExceptionCode.timeout,
-            message: 'Timed out',
-            details: {
-              'category': 'timeout',
-              'operation': 'writeInPlaceBytes',
-              'retryable': true,
-              'relativePath': 'Documents/data.bin',
-            },
-          );
-        }
-        return null;
-      });
-
-      await expectLater(
-        () => platform.writeInPlaceBytes(
-          containerId: containerId,
-          relativePath: 'Documents/data.bin',
-          contents: Uint8List.fromList([4, 5, 6]),
-        ),
-        throwsA(isA<ICloudTimeoutException>()),
-      );
     });
 
     test('writeInPlaceBytes maps structured coordination payloads', () async {
@@ -868,33 +746,6 @@ void main() {
     );
   });
 
-  test('getItemMetadata maps structured timeout payloads', () async {
-    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-        .setMockMethodCallHandler(channel, (methodCall) async {
-      if (methodCall.method == 'getItemMetadata') {
-        throw PlatformException(
-          code: PlatformExceptionCode.timeout,
-          message: 'Timed out',
-          details: {
-            'category': 'timeout',
-            'operation': 'getItemMetadata',
-            'retryable': true,
-            'relativePath': 'file',
-          },
-        );
-      }
-      return null;
-    });
-
-    await expectLater(
-      () => platform.getItemMetadata(
-        containerId: containerId,
-        relativePath: 'file',
-      ),
-      throwsA(isA<ICloudTimeoutException>()),
-    );
-  });
-
   test('getContainerPath', () async {
     final path = await platform.getContainerPath(containerId: containerId);
     expect(path, '/container/path');
@@ -910,53 +761,17 @@ void main() {
     expect(item.isUploaded, true);
   });
 
-  test('copy maps structured downloadInProgress payloads', () async {
-    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-        .setMockMethodCallHandler(channel, (methodCall) async {
-      if (methodCall.method == 'copy') {
-        throw PlatformException(
-          code: PlatformExceptionCode.downloadInProgress,
-          message: 'Download already in progress',
-          details: {
-            'category': 'downloadInProgress',
-            'operation': 'copy',
-            'retryable': true,
-            'relativePath': 'destination/file.txt',
-          },
-        );
-      }
-      return null;
-    });
-
-    await expectLater(
-      () => platform.copy(
-        containerId: containerId,
-        fromRelativePath: 'source/file.txt',
-        toRelativePath: 'destination/file.txt',
-      ),
-      throwsA(
-        isA<ICloudDownloadInProgressException>()
-            .having(
-              (error) => error.relativePath,
-              'relativePath',
-              'destination/file.txt',
-            )
-            .having((error) => error.operation, 'operation', 'copy'),
-      ),
-    );
-  });
-
   test('icloudAvailable keeps raw PlatformException behavior', () async {
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(channel, (methodCall) async {
       if (methodCall.method == 'icloudAvailable') {
         throw PlatformException(
-          code: PlatformExceptionCode.timeout,
-          message: 'Timed out',
+          code: PlatformExceptionCode.nativeCodeError,
+          message: 'Native failure',
           details: {
-            'category': 'timeout',
+            'category': 'unknownNative',
             'operation': 'icloudAvailable',
-            'retryable': true,
+            'retryable': false,
           },
         );
       }
@@ -1093,12 +908,12 @@ void main() {
         .setMockMethodCallHandler(channel, (methodCall) async {
       if (methodCall.method == 'readInPlace') {
         throw PlatformException(
-          code: PlatformExceptionCode.timeout,
-          message: 'Timed out',
+          code: PlatformExceptionCode.conflict,
+          message: 'Conflict detected',
           details: {
-            'category': 'timeout',
+            'category': 'conflict',
             'operation': 'readInPlace',
-            'retryable': true,
+            'retryable': false,
             'relativePath': 'Documents/test.json',
           },
         );
@@ -1111,7 +926,7 @@ void main() {
         containerId: containerId,
         relativePath: 'Documents/test.json',
       ),
-      throwsA(isA<ICloudTimeoutException>()),
+      throwsA(isA<ICloudConflictException>()),
     );
   });
 
@@ -1121,8 +936,8 @@ void main() {
         .setMockMethodCallHandler(channel, (methodCall) async {
       if (methodCall.method == 'listContents') {
         throw PlatformException(
-          code: PlatformExceptionCode.timeout,
-          message: 'Legacy timeout',
+          code: PlatformExceptionCode.nativeCodeError,
+          message: 'Legacy native failure',
         );
       }
       return null;
@@ -1134,7 +949,7 @@ void main() {
         isA<PlatformException>().having(
           (error) => error.code,
           'code',
-          PlatformExceptionCode.timeout,
+          PlatformExceptionCode.nativeCodeError,
         ),
       ),
     );
@@ -1146,12 +961,12 @@ void main() {
       mockStreamHandler = MockStreamHandler.inline(
         onListen: (arguments, events) {
           events.error(
-            code: PlatformExceptionCode.timeout,
-            message: 'Timed out',
+            code: PlatformExceptionCode.nativeCodeError,
+            message: 'Native failure',
             details: {
-              'category': 'timeout',
+              'category': 'unknownNative',
               'operation': 'downloadFile',
-              'retryable': true,
+              'retryable': false,
             },
           );
         },
@@ -1171,7 +986,6 @@ void main() {
       final events = await progressStream.toList();
       expect(events, hasLength(1));
       expect(events.first.exception, isA<PlatformException>());
-      expect(events.first.exception, isNot(isA<ICloudTimeoutException>()));
     },
   );
 }

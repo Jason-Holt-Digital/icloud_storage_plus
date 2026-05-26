@@ -21,12 +21,6 @@ class PlatformExceptionCode {
   /// The code indicates the operation failed due to a coordination conflict.
   static const String conflict = 'E_CONFLICT';
 
-  /// The code indicates the item is not downloaded locally yet.
-  static const String itemNotDownloaded = 'E_NOT_DOWNLOADED';
-
-  /// The code indicates a download is already in progress.
-  static const String downloadInProgress = 'E_DOWNLOAD_IN_PROGRESS';
-
   /// The code indicates file coordination failed.
   static const String coordination = 'E_COORDINATION';
 
@@ -59,9 +53,6 @@ class PlatformExceptionCode {
   /// The code indicates the plugin was not properly initialized on the native
   /// side.
   static const String initializationError = 'E_INIT';
-
-  /// The code indicates an iCloud download made no progress before timing out.
-  static const String timeout = 'E_TIMEOUT';
 
   /// The code indicates the native layer sent an invalid event type
   /// This represents a bug in the plugin. Please open a GitHub issue if you
@@ -173,62 +164,6 @@ class ICloudConflictException extends ICloudOperationException {
         );
 }
 
-/// Thrown when an item must be downloaded before use.
-class ICloudItemNotDownloadedException extends ICloudOperationException {
-  /// Creates an item-not-downloaded exception.
-  ICloudItemNotDownloadedException._(
-    _ICloudOperationExceptionData data,
-  ) : super(
-          category: data.category,
-          operation: data.operation,
-          retryable: data.retryable,
-          message: data.message,
-          relativePath: data.relativePath,
-          pathKind: data.pathKind,
-          nativeDomain: data.nativeDomain,
-          nativeCode: data.nativeCode,
-          nativeDescription: data.nativeDescription,
-          underlying: data.underlying,
-        );
-}
-
-/// Thrown when a download is already active for the item.
-class ICloudDownloadInProgressException extends ICloudOperationException {
-  /// Creates a download-in-progress exception.
-  ICloudDownloadInProgressException._(
-    _ICloudOperationExceptionData data,
-  ) : super(
-          category: data.category,
-          operation: data.operation,
-          retryable: data.retryable,
-          message: data.message,
-          relativePath: data.relativePath,
-          pathKind: data.pathKind,
-          nativeDomain: data.nativeDomain,
-          nativeCode: data.nativeCode,
-          nativeDescription: data.nativeDescription,
-          underlying: data.underlying,
-        );
-}
-
-/// Thrown when a native request times out.
-class ICloudTimeoutException extends ICloudOperationException {
-  /// Creates a timeout exception.
-  ICloudTimeoutException._(_ICloudOperationExceptionData data)
-      : super(
-          category: data.category,
-          operation: data.operation,
-          retryable: data.retryable,
-          message: data.message,
-          relativePath: data.relativePath,
-          pathKind: data.pathKind,
-          nativeDomain: data.nativeDomain,
-          nativeCode: data.nativeCode,
-          nativeDescription: data.nativeDescription,
-          underlying: data.underlying,
-        );
-}
-
 /// Thrown when file coordination fails for another reason.
 class ICloudCoordinationException extends ICloudOperationException {
   /// Creates a coordination exception.
@@ -304,9 +239,6 @@ ICloudOperationException mapICloudPlatformException(PlatformException error) {
     'itemNotFound' => ICloudItemNotFoundException._(data),
     'containerAccess' => ICloudContainerAccessException._(data),
     'conflict' => ICloudConflictException._(data),
-    'itemNotDownloaded' => ICloudItemNotDownloadedException._(data),
-    'downloadInProgress' => ICloudDownloadInProgressException._(data),
-    'timeout' => ICloudTimeoutException._(data),
     'coordination' => ICloudCoordinationException._(data),
     'invalidArgument' => ICloudInvalidArgumentException._(data),
     _ => ICloudUnknownNativeException._(data),

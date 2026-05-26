@@ -8,15 +8,16 @@
 [![shorebird ci](https://api.shorebird.dev/api/v1/github/kingdomseed/icloud_storage_plus/badge.svg)](https://console.shorebird.dev/ci)
 [![Publisher](https://img.shields.io/badge/publisher-jasonholtdigital.com-2b7cff)](https://pub.dev/publishers/jasonholtdigital.com)
 
-Flutter plugin for iCloud document storage (iOS/macOS) with coordinated file
-access and optional Files app (iCloud Drive) visibility.
+Flutter plugin for local file access inside an iCloud Drive ubiquity container
+on iOS and macOS, with coordinated file operations and optional Files app
+visibility.
 
 Hosted reference docs are available on DeepWiki:
 https://deepwiki.com/kingdomseed/icloud_storage_plus
 
-This package operates inside your app’s iCloud ubiquity container. You choose
-which container to use via the `containerId` you configured in Apple Developer
-Portal / Xcode.
+This package operates inside your app's local iCloud ubiquity container. Apple
+owns iCloud Drive sync, materialization, freshness, and document conflict
+behavior; this plugin performs local file operations against the container path.
 
 ## Platform support
 
@@ -81,11 +82,9 @@ There are four “tiers” of API in this plugin:
     - `writeInPlace`, `writeInPlaceBytes`
     - On iOS and macOS, existing-file writes use coordinated atomic replacement so the
       destination path stays stable during overwrite.
-    - On iOS and macOS, overwrite paths for `writeInPlace`,
-      `writeInPlaceBytes`, and `uploadFile` proactively start any needed
-      iCloud download, wait with an interactive-write timeout budget, and
-      resolve unresolved `NSFileVersion` conflicts before the coordinated
-      replace.
+    - On iOS and macOS, file-write overwrite paths use coordinated local
+      replacement. iCloud Drive sync and document conflict behavior remain
+      Apple's responsibility.
     - Those file-write overwrite paths still reject an existing directory
       destination instead of replacing it.
 3. **File management and queries**
@@ -427,20 +426,11 @@ exceptions:
 - `ICloudItemNotFoundException`
 - `ICloudConflictException`
 - `ICloudCoordinationException`
-- `ICloudItemNotDownloadedException`
-- `ICloudDownloadInProgressException`
-- `ICloudTimeoutException`
 - `ICloudUnknownNativeException`
 
 For iOS and macOS file-write overwrite operations, trying to overwrite an existing
 directory target is treated as an invalid argument rather than as a successful
 replacement.
-
-For iOS and macOS overwrite paths, conflict/download refusal is now a
-last-resort outcome rather than the default contract. Existing-file overwrites
-first try to auto-download non-current ubiquitous items and auto-resolve
-unresolved conflict versions. If the download wait exhausts its interactive
-budget, the request/response API surfaces `ICloudTimeoutException`.
 
 These exceptions expose `operation`, `retryable`, `relativePath`, and native
 error context when the platform provides it.
@@ -463,8 +453,6 @@ emit an explicit `coordination` category.
 - `E_CTR` (iCloud container/permission issues)
 - `E_CONFLICT` (structured conflict failures)
 - `E_FNF` (file not found)
-- `E_NOT_DOWNLOADED` (structured nonlocal placeholder failures)
-- `E_DOWNLOAD_IN_PROGRESS` (structured active-download failures)
 - `E_FNF_READ` (file not found during read)
 - `E_FNF_WRITE` (file not found during write)
 - `E_NAT` (native error)
@@ -472,7 +460,6 @@ emit an explicit `coordination` category.
 - `E_READ` (read failure)
 - `E_CANCEL` (operation canceled)
 - `E_INIT` (plugin not properly initialized)
-- `E_TIMEOUT` (download idle timeout)
 - `E_PLUGIN_INTERNAL` (internal plugin error)
 - `E_INVALID_EVENT` (invalid event from native layer)
 

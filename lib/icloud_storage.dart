@@ -16,11 +16,11 @@ export 'models/icloud_item_metadata.dart';
 export 'models/transfer_progress.dart';
 
 /// The main class for the plugin. Provides streaming, file-path-only access
-/// to iCloud containers using Apple’s document APIs.
+/// to files in an iCloud Drive ubiquity container using Apple's document APIs.
 ///
-/// ## Overriding Goals
-/// 1. Sync files to iCloud so users can retrieve them on other devices.
-/// 2. Expose files in the Files app in iCloud Drive (when enabled by the app).
+/// iCloud Drive sync, freshness, materialization, and conflict handling are
+/// owned by Apple. This plugin performs local file operations against the
+/// ubiquity container.
 ///
 /// ## Transfer API (path-only)
 /// For large files, prefer [uploadFile] and [downloadFile]. These methods pass
@@ -192,12 +192,8 @@ class ICloudStorage {
   /// Coordinated access loads the full contents into memory. Text is decoded
   /// as UTF-8; use [readInPlaceBytes] for binary formats.
   ///
-  /// [idleTimeouts] configures the idle watchdog for downloads (defaults to
-  /// 60s, 90s, 180s).
-  /// [retryBackoff] configures the retry delay between attempts (exponential
-  /// backoff by default).
-  ///
-  /// Returns the file contents as a String.
+  /// Returns the local file contents as a String when Apple has local bytes
+  /// available for the document.
   ///
   /// Throws on file-not-found and other failures.
   /// Note: the return type is nullable to match the platform interface, but
@@ -206,8 +202,6 @@ class ICloudStorage {
   static Future<String?> readInPlace({
     required String containerId,
     required String relativePath,
-    List<Duration>? idleTimeouts,
-    List<Duration>? retryBackoff,
   }) async {
     // Reads are file-centric; reject directory paths.
     if (relativePath.endsWith('/')) {
@@ -225,8 +219,6 @@ class ICloudStorage {
     return ICloudStoragePlatform.instance.readInPlace(
       containerId: containerId,
       relativePath: relativePath,
-      idleTimeouts: idleTimeouts,
-      retryBackoff: retryBackoff,
     );
   }
 
@@ -241,19 +233,13 @@ class ICloudStorage {
   /// Coordinated access loads the full contents into memory. Use for small
   /// files.
   ///
-  /// [idleTimeouts] configures the idle watchdog for downloads (defaults to
-  /// 60s, 90s, 180s).
-  /// [retryBackoff] configures the retry delay between attempts (exponential
-  /// backoff by default).
-  ///
-  /// Returns the file contents as bytes.
+  /// Returns the local file contents as bytes when Apple has local bytes
+  /// available for the document.
   ///
   /// Throws on file-not-found and other failures.
   static Future<Uint8List?> readInPlaceBytes({
     required String containerId,
     required String relativePath,
-    List<Duration>? idleTimeouts,
-    List<Duration>? retryBackoff,
   }) async {
     if (relativePath.endsWith('/')) {
       throw InvalidArgumentException('invalid relativePath: $relativePath');
@@ -270,8 +256,6 @@ class ICloudStorage {
     return ICloudStoragePlatform.instance.readInPlaceBytes(
       containerId: containerId,
       relativePath: relativePath,
-      idleTimeouts: idleTimeouts,
-      retryBackoff: retryBackoff,
     );
   }
 
