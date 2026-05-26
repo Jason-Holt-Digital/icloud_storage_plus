@@ -137,8 +137,8 @@ the user explicitly asks for that design. If the public contract is wrong,
 change it directly and require callers to update.
 
 When unsure about iCloud behavior, consult Apple's Foundation/iCloud Drive docs
-or `/Users/jholt/apple-foundation-study-vault` before designing policy. Do not
-infer cloud-service semantics from other storage SDKs.
+(https://developer.apple.com/documentation/foundation/icloud) before designing
+policy. Do not infer cloud-service semantics from other storage SDKs.
 
 ## Before Planning iCloud Work
 
