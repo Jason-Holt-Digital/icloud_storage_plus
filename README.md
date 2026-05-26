@@ -8,15 +8,16 @@
 [![shorebird ci](https://api.shorebird.dev/api/v1/github/kingdomseed/icloud_storage_plus/badge.svg)](https://console.shorebird.dev/ci)
 [![Publisher](https://img.shields.io/badge/publisher-jasonholtdigital.com-2b7cff)](https://pub.dev/publishers/jasonholtdigital.com)
 
-Flutter plugin for iCloud document storage (iOS/macOS) with coordinated file
-access and optional Files app (iCloud Drive) visibility.
+Flutter plugin for local file access inside an iCloud Drive ubiquity container
+on iOS and macOS, with coordinated file operations and optional Files app
+visibility.
 
 Hosted reference docs are available on DeepWiki:
 https://deepwiki.com/kingdomseed/icloud_storage_plus
 
-This package operates inside your app’s iCloud ubiquity container. You choose
-which container to use via the `containerId` you configured in Apple Developer
-Portal / Xcode.
+This package operates inside your app's local iCloud ubiquity container. Apple
+owns iCloud Drive sync, materialization, freshness, and document conflict
+behavior; this plugin performs local file operations against the container path.
 
 ## Platform support
 
@@ -81,11 +82,9 @@ There are four “tiers” of API in this plugin:
     - `writeInPlace`, `writeInPlaceBytes`
     - On iOS and macOS, existing-file writes use coordinated atomic replacement so the
       destination path stays stable during overwrite.
-    - On iOS and macOS, overwrite paths for `writeInPlace`,
-      `writeInPlaceBytes`, and `uploadFile` proactively start any needed
-      iCloud download, wait with an interactive-write timeout budget, and
-      resolve unresolved `NSFileVersion` conflicts before the coordinated
-      replace.
+    - On iOS and macOS, file-write overwrite paths use coordinated local
+      replacement. iCloud Drive sync and document conflict behavior remain
+      Apple's responsibility.
     - Those file-write overwrite paths still reject an existing directory
       destination instead of replacing it.
 3. **File management and queries**
@@ -93,9 +92,11 @@ There are four “tiers” of API in this plugin:
    - `documentExists`, `getItemMetadata`, `getDocumentMetadata`
    - On iOS and macOS, copying onto an existing destination also uses coordinated
      atomic replacement rather than remove-then-copy behavior.
-   - `copy()` keeps its file-or-directory behavior for existing destinations;
-     the stricter file-only overwrite rules apply to file-write APIs such as
-     `uploadFile`, `writeInPlace`, and `writeInPlaceBytes`.
+   - Existing-destination `copy()` replacement is file-only on iOS and macOS:
+     existing directories are rejected instead of replaced.
+   - `copy()` can copy files or directories to new destinations. If you need to
+     replace an existing directory tree, manage that directory explicitly rather
+     than relying on overwrite replacement.
 4. **Container listing** (two complementary approaches)
    - `gather` — NSMetadataQuery-based; sees remote files and document promises;
      provides real-time change notifications and download progress; eventually
@@ -109,6 +110,21 @@ filesystem work for the in-place APIs runs there so iCloud container lookup and
 `UIDocument` preflight do not block the app's main thread. If that queue is not
 available, Flutter falls back to its default platform-channel dispatch model.
 macOS keeps the existing dispatch model.
+
+## Migration notes
+
+- `readInPlace` and `readInPlaceBytes` no longer accept `idleTimeouts` or
+  `retryBackoff`. Remove those named arguments from callers.
+- `ICloudTimeoutException`, `ICloudItemNotDownloadedException`,
+  `ICloudDownloadInProgressException`, `PlatformExceptionCode.timeout`,
+  `PlatformExceptionCode.itemNotDownloaded`, and
+  `PlatformExceptionCode.downloadInProgress` were removed. Normal iCloud Drive
+  lifecycle state is no longer a plugin-owned error surface.
+- On iOS and macOS, `copy()` over an existing destination no longer reports
+  plugin-owned readiness failures for non-current, not-downloaded, downloading,
+  or conflicted iCloud metadata. It rejects existing directory destinations,
+  then lets Foundation perform the local replacement and report any actual
+  operation failure.
 
 ## Quick start
 
@@ -228,10 +244,10 @@ File-centric operations reject trailing slashes (they require a file path):
 - `uploadFile`, `downloadFile`
 - `readInPlace`, `readInPlaceBytes`, `writeInPlace`, `writeInPlaceBytes`
 
-On iOS and macOS, file-centric overwrite operations also reject an existing directory
-destination instead of replacing it. If you need to replace an existing
-directory tree, use the directory-aware `copy()` APIs rather than a file-write
-operation.
+On iOS and macOS, file-centric overwrite operations reject an existing directory
+destination instead of replacing it. Existing-destination `copy()` replacement
+does the same; `copy()` can still copy a directory when the destination does not
+already exist.
 
 ### Path validation
 
@@ -427,20 +443,11 @@ exceptions:
 - `ICloudItemNotFoundException`
 - `ICloudConflictException`
 - `ICloudCoordinationException`
-- `ICloudItemNotDownloadedException`
-- `ICloudDownloadInProgressException`
-- `ICloudTimeoutException`
 - `ICloudUnknownNativeException`
 
 For iOS and macOS file-write overwrite operations, trying to overwrite an existing
 directory target is treated as an invalid argument rather than as a successful
 replacement.
-
-For iOS and macOS overwrite paths, conflict/download refusal is now a
-last-resort outcome rather than the default contract. Existing-file overwrites
-first try to auto-download non-current ubiquitous items and auto-resolve
-unresolved conflict versions. If the download wait exhausts its interactive
-budget, the request/response API surfaces `ICloudTimeoutException`.
 
 These exceptions expose `operation`, `retryable`, `relativePath`, and native
 error context when the platform provides it.
@@ -449,6 +456,11 @@ error context when the platform provides it.
 Current iOS and macOS native implementations still classify some lower-level
 coordination problems as `ICloudUnknownNativeException` when they do not yet
 emit an explicit `coordination` category.
+
+Normal iCloud Drive lifecycle states such as not-current, not-downloaded, or
+downloading are not typed plugin exceptions. Metadata APIs can still report
+those states as metadata, but request/response operations no longer manufacture
+timeout/readiness failures from them.
 
 ### Raw `PlatformException` cases
 
@@ -463,8 +475,6 @@ emit an explicit `coordination` category.
 - `E_CTR` (iCloud container/permission issues)
 - `E_CONFLICT` (structured conflict failures)
 - `E_FNF` (file not found)
-- `E_NOT_DOWNLOADED` (structured nonlocal placeholder failures)
-- `E_DOWNLOAD_IN_PROGRESS` (structured active-download failures)
 - `E_FNF_READ` (file not found during read)
 - `E_FNF_WRITE` (file not found during write)
 - `E_NAT` (native error)
@@ -472,7 +482,6 @@ emit an explicit `coordination` category.
 - `E_READ` (read failure)
 - `E_CANCEL` (operation canceled)
 - `E_INIT` (plugin not properly initialized)
-- `E_TIMEOUT` (download idle timeout)
 - `E_PLUGIN_INTERNAL` (internal plugin error)
 - `E_INVALID_EVENT` (invalid event from native layer)
 

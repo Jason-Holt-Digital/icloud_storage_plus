@@ -134,23 +134,12 @@ class MethodChannelICloudStorage extends ICloudStoragePlatform {
   Future<String?> readInPlace({
     required String containerId,
     required String relativePath,
-    List<Duration>? idleTimeouts,
-    List<Duration>? retryBackoff,
   }) async {
     final result = await _invokeMethod<String>(
       'readInPlace',
       {
         'containerId': containerId,
         'relativePath': relativePath,
-        // Send integer seconds; sub-second precision is intentionally ignored.
-        if (idleTimeouts != null)
-          'idleTimeoutSeconds': idleTimeouts
-              .map((duration) => duration.inSeconds)
-              .toList(growable: false),
-        if (retryBackoff != null)
-          'retryBackoffSeconds': retryBackoff
-              .map((duration) => duration.inSeconds)
-              .toList(growable: false),
       },
     );
     return result;
@@ -160,23 +149,12 @@ class MethodChannelICloudStorage extends ICloudStoragePlatform {
   Future<Uint8List?> readInPlaceBytes({
     required String containerId,
     required String relativePath,
-    List<Duration>? idleTimeouts,
-    List<Duration>? retryBackoff,
   }) async {
     final result = await _invokeMethod<Uint8List>(
       'readInPlaceBytes',
       {
         'containerId': containerId,
         'relativePath': relativePath,
-        // Send integer seconds; sub-second precision is intentionally ignored.
-        if (idleTimeouts != null)
-          'idleTimeoutSeconds': idleTimeouts
-              .map((duration) => duration.inSeconds)
-              .toList(growable: false),
-        if (retryBackoff != null)
-          'retryBackoffSeconds': retryBackoff
-              .map((duration) => duration.inSeconds)
-              .toList(growable: false),
       },
     );
     return result;

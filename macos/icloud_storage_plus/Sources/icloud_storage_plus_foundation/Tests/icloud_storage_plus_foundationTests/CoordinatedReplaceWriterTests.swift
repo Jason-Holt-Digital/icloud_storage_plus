@@ -8,15 +8,10 @@ import XCTest
 /// the Slice B/C/D architectural correction.
 private final class LockedCallbacks: @unchecked Sendable {
     private let lock = NSLock()
-    private var _ensureDownloadCount = 0
     private var _verifyDestinationCount = 0
     private var _resolveConflictsCount = 0
     private var _replaceItemCount = 0
 
-    var ensureDownloadCount: Int {
-        lock.lock(); defer { lock.unlock() }
-        return _ensureDownloadCount
-    }
     var verifyDestinationCount: Int {
         lock.lock(); defer { lock.unlock() }
         return _verifyDestinationCount
@@ -30,10 +25,6 @@ private final class LockedCallbacks: @unchecked Sendable {
         return _replaceItemCount
     }
 
-    func bumpEnsure() {
-        lock.lock(); defer { lock.unlock() }
-        _ensureDownloadCount += 1
-    }
     func bumpVerify() {
         lock.lock(); defer { lock.unlock() }
         _verifyDestinationCount += 1
@@ -97,36 +88,8 @@ final class CoordinatedReplaceWriterTests: XCTestCase {
         XCTAssertFalse(helperSource.contains("copyItemOverwritingExistingItem"))
     }
 
-    func testHelperSourceDoesNotKeepRedundantNonCurrentGuard() throws {
-        let helperSource = try String(
-            contentsOfFile: #filePath
-                .replacingOccurrences(
-                    of: "/Tests/icloud_storage_plus_foundationTests/"
-                        + "CoordinatedReplaceWriterTests.swift",
-                    with: "/CoordinatedReplaceWriter.swift"
-                ),
-            encoding: .utf8
-        )
-
-        XCTAssertFalse(
-            helperSource.contains("if downloadStatus != .current"),
-            "replaceReadyStateError should not keep a non-current guard after "
-                + "the earlier .current return."
-        )
-    }
-
     func testMacOSCopyPropagatesSourceReadCoordinationErrors() throws {
-        let pluginSource = try String(
-            contentsOfFile: #filePath
-                .replacingOccurrences(
-                    of: "/Sources/icloud_storage_plus_foundation/Tests/"
-                        + "icloud_storage_plus_foundationTests/"
-                        + "CoordinatedReplaceWriterTests.swift",
-                    with: "/Sources/icloud_storage_plus/"
-                        + "macOSICloudStoragePlugin.swift"
-                ),
-            encoding: .utf8
-        )
+        let pluginSource = try macOSPluginSource()
 
         XCTAssertTrue(
             pluginSource.contains("var sourceCoordinationError: NSError?"),
@@ -161,17 +124,7 @@ final class CoordinatedReplaceWriterTests: XCTestCase {
     }
 
     func testMacOSCopyFailuresReportDestinationRelativePath() throws {
-        let pluginSource = try String(
-            contentsOfFile: #filePath
-                .replacingOccurrences(
-                    of: "/Sources/icloud_storage_plus_foundation/Tests/"
-                        + "icloud_storage_plus_foundationTests/"
-                        + "CoordinatedReplaceWriterTests.swift",
-                    with: "/Sources/icloud_storage_plus/"
-                        + "macOSICloudStoragePlugin.swift"
-                ),
-            encoding: .utf8
-        )
+        let pluginSource = try macOSPluginSource()
 
         XCTAssertEqual(
             pluginSource.components(
@@ -185,17 +138,7 @@ final class CoordinatedReplaceWriterTests: XCTestCase {
     }
 
     func testMacOSUploadProgressFailuresReportCloudRelativePath() throws {
-        let pluginSource = try String(
-            contentsOfFile: #filePath
-                .replacingOccurrences(
-                    of: "/Sources/icloud_storage_plus_foundation/Tests/"
-                        + "icloud_storage_plus_foundationTests/"
-                        + "CoordinatedReplaceWriterTests.swift",
-                    with: "/Sources/icloud_storage_plus/"
-                        + "macOSICloudStoragePlugin.swift"
-                ),
-            encoding: .utf8
-        )
+        let pluginSource = try macOSPluginSource()
 
         XCTAssertTrue(
             pluginSource.contains(
@@ -261,7 +204,6 @@ final class CoordinatedReplaceWriterTests: XCTestCase {
 
         let writer = CoordinatedReplaceWriter(
             fileExists: { _ in true },
-            ensureDownloaded: { _ in },
             verifyDestination: { _ in
                 throw NSError(
                     domain: "ICloudStoragePlusErrorDomain",
@@ -303,94 +245,12 @@ final class CoordinatedReplaceWriterTests: XCTestCase {
         XCTAssertFalse(preparedReplacement)
     }
 
-    func testOverwriteExistingItemThrowsWhenDestinationIsNotFullyLocal() async {
-        let destinationURL = URL(fileURLWithPath: "/tmp/file.json")
-        var preparedReplacement = false
-
-        let writer = CoordinatedReplaceWriter(
-            fileExists: { _ in true },
-            ensureDownloaded: { _ in },
-            verifyDestination: { _ in
-                throw NSError(
-                    domain: "ICloudStoragePlusErrorDomain",
-                    code: 2,
-                    userInfo: [
-                        NSLocalizedDescriptionKey:
-                            "Cannot replace a nonlocal iCloud item until it is fully downloaded.",
-                    ]
-                )
-            },
-            createReplacementDirectory: { _ in
-                XCTFail("should not create replacement directory")
-                return URL(fileURLWithPath: "/tmp/replacement")
-            },
-            coordinateReplace: { _, _ in
-                XCTFail("should not coordinate replace")
-            },
-            resolveConflicts: { _ in
-                XCTFail("should not resolve conflicts")
-            },
-            replaceItem: { _, _ in
-                XCTFail("should not replace item")
-            },
-            removeItem: { _ in }
-        )
-
-        do {
-            _ = try await writer.overwriteExistingItem(at: destinationURL) { _ in
-                preparedReplacement = true
-            }
-            XCTFail("expected not-downloaded error")
-        } catch {
-            XCTAssertEqual(
-                error.localizedDescription,
-                "Cannot replace a nonlocal iCloud item until it is fully downloaded."
-            )
-        }
-
-        XCTAssertFalse(preparedReplacement)
-    }
-
-    func testReplaceReadyStateErrorReturnsDistinctDownloadInProgressCode() {
-        let error = CoordinatedReplaceWriter.replaceReadyStateError(
-            hasConflicts: false,
-            isUbiquitousItem: true,
-            downloadStatus: URLUbiquitousItemDownloadingStatus.downloaded,
-            isDownloading: true
-        ) as NSError?
-
-        XCTAssertEqual(error?.domain, "ICloudStoragePlusErrorDomain")
-        XCTAssertEqual(error?.code, 3)
-        XCTAssertEqual(
-            error?.localizedDescription,
-            "Cannot replace an iCloud item while it is downloading."
-        )
-    }
-
-    func testReplaceReadyStateErrorRejectsDownloadedButNotCurrentItems() {
-        let error = CoordinatedReplaceWriter.replaceReadyStateError(
-            hasConflicts: false,
-            isUbiquitousItem: true,
-            downloadStatus: URLUbiquitousItemDownloadingStatus.downloaded,
-            isDownloading: false
-        ) as NSError?
-
-        XCTAssertEqual(error?.domain, "ICloudStoragePlusErrorDomain")
-        XCTAssertEqual(error?.code, 2)
-        XCTAssertEqual(
-            error?.localizedDescription,
-            "Cannot replace a nonlocal iCloud item until it is fully downloaded."
-        )
-    }
-
     func testOverwriteExistingItemReturnsFalseWhenDestinationDoesNotExist() async throws {
         var preparedReplacement = false
         var verifiedDestinationState = false
-        var ensuredDownload = false
 
         let writer = CoordinatedReplaceWriter(
             fileExists: { _ in false },
-            ensureDownloaded: { _ in ensuredDownload = true },
             verifyDestination: { _ in
                 verifiedDestinationState = true
             },
@@ -419,7 +279,6 @@ final class CoordinatedReplaceWriterTests: XCTestCase {
         XCTAssertFalse(handled)
         XCTAssertFalse(preparedReplacement)
         XCTAssertFalse(verifiedDestinationState)
-        XCTAssertFalse(ensuredDownload)
     }
 
     func testOverwriteExistingItemCleansUpReplacementArtifactWhenReplaceFails() async {
@@ -430,7 +289,6 @@ final class CoordinatedReplaceWriterTests: XCTestCase {
 
         let writer = CoordinatedReplaceWriter(
             fileExists: { _ in true },
-            ensureDownloaded: { _ in },
             verifyDestination: { _ in },
             createReplacementDirectory: { _ in replacementDirectory },
             coordinateReplace: { url, accessor in try accessor(url) },
@@ -454,11 +312,10 @@ final class CoordinatedReplaceWriterTests: XCTestCase {
         XCTAssertNotNil(cleanedURL)
     }
 
-    // MARK: - Phase 2: auto-download + auto-resolve behavior
+    // MARK: - Phase 2: coordinated overwrite behavior
 
     private func makeWriter(
         fileExists: @escaping CoordinatedReplaceWriter.FileExists = { _ in true },
-        ensureDownloaded: @escaping CoordinatedReplaceWriter.EnsureDownloaded = { _ in },
         verifyDestination: @escaping CoordinatedReplaceWriter.VerifyDestination = { _ in
             XCTFail("verifyDestination should not fire in happy path")
         },
@@ -473,7 +330,6 @@ final class CoordinatedReplaceWriterTests: XCTestCase {
     ) -> CoordinatedReplaceWriter {
         CoordinatedReplaceWriter(
             fileExists: fileExists,
-            ensureDownloaded: ensureDownloaded,
             verifyDestination: verifyDestination,
             createReplacementDirectory: createReplacementDirectory,
             coordinateReplace: coordinateReplace,
@@ -488,7 +344,6 @@ final class CoordinatedReplaceWriterTests: XCTestCase {
 
         let writer = CoordinatedReplaceWriter(
             fileExists: { _ in true },
-            ensureDownloaded: { _ in callbacks.bumpEnsure() },
             verifyDestination: { _ in callbacks.bumpVerify() },
             createReplacementDirectory: { _ in URL(fileURLWithPath: "/tmp/r") },
             coordinateReplace: { url, accessor in try accessor(url) },
@@ -503,21 +358,16 @@ final class CoordinatedReplaceWriterTests: XCTestCase {
 
         XCTAssertTrue(handled)
         XCTAssertEqual(
-            callbacks.ensureDownloadCount, 1,
-            "ensureDownloaded must run exactly once"
-        )
-        XCTAssertEqual(
             callbacks.resolveConflictsCount, 1,
             "resolveConflicts must run exactly once"
         )
     }
 
-    func testEnsureDownloadedRunsBeforeVerifyDestination() async throws {
+    func testVerifyDestinationRunsBeforeCoordinateReplace() async throws {
         let log = LockedCallLog()
 
         let writer = CoordinatedReplaceWriter(
             fileExists: { _ in true },
-            ensureDownloaded: { _ in log.append("ensureDownloaded") },
             verifyDestination: { _ in log.append("verifyDestination") },
             createReplacementDirectory: { _ in URL(fileURLWithPath: "/tmp/r") },
             coordinateReplace: { url, accessor in
@@ -536,46 +386,13 @@ final class CoordinatedReplaceWriterTests: XCTestCase {
         XCTAssertEqual(
             log.events,
             [
-                "ensureDownloaded",
                 "verifyDestination",
                 "coordinateReplace",
                 "resolveConflicts",
                 "replaceItem",
             ],
-            "step order must match spec: download → pre-flight → coord → resolve → replace"
+            "step order must match spec: pre-flight → coord → resolve → replace"
         )
-    }
-
-    func testEnsureDownloadedFailurePreventsWrite() async {
-        let failure = NSError(
-            domain: "ICloudStorageTimeout",
-            code: 1,
-            userInfo: [NSLocalizedDescriptionKey: "Download idle timeout"]
-        )
-
-        let writer = makeWriter(
-            ensureDownloaded: { _ in throw failure },
-            verifyDestination: { _ in
-                XCTFail("verifyDestination must not run after ensureDownloaded throws")
-            },
-            resolveConflicts: { _ in
-                XCTFail("resolveConflicts must not run after ensureDownloaded throws")
-            },
-            replaceItem: { _, _ in
-                XCTFail("replaceItem must not run after ensureDownloaded throws")
-            }
-        )
-
-        do {
-            _ = try await writer.overwriteExistingItem(
-                at: URL(fileURLWithPath: "/tmp/file.json")
-            ) { _ in
-                XCTFail("prepareReplacementFile must not run after ensureDownloaded throws")
-            }
-            XCTFail("expected ensureDownloaded failure to bubble")
-        } catch {
-            XCTAssertEqual((error as NSError).domain, "ICloudStorageTimeout")
-        }
     }
 
     func testResolveConflictsFailureBubblesAndBlocksReplace() async {
@@ -634,39 +451,6 @@ final class CoordinatedReplaceWriterTests: XCTestCase {
         XCTAssertEqual(replaceItemCount, 1)
     }
 
-    // MARK: - Slice A: pre-flight reduction
-
-    func testLiveWriterDoesNotInvokeFullLegacyPreflight() throws {
-        let writerSource = try String(
-            contentsOfFile: #filePath
-                .replacingOccurrences(
-                    of: "/Tests/icloud_storage_plus_foundationTests/"
-                        + "CoordinatedReplaceWriterTests.swift",
-                    with: "/CoordinatedReplaceWriter.swift"
-                ),
-            encoding: .utf8
-        )
-
-        // The `live` binding's verifyDestination must be the new
-        // directory-only helper, NOT the legacy full pre-flight that
-        // refuses on hasConflicts. Auto-resolve runs inside the
-        // coordinator block; pre-flight refusal would fire first and
-        // make the auto-resolve seam unreachable.
-        XCTAssertFalse(
-            writerSource.contains("verifyFileDestinationCanBeOverwritten"),
-            "live.verifyDestination must NOT route through "
-                + "verifyFileDestinationCanBeOverwritten — that helper "
-                + "transitively refuses on hasConflicts and would block "
-                + "auto-resolution before it can run."
-        )
-        XCTAssertTrue(
-            writerSource.contains("verifyOverwriteDestinationIsFile"),
-            "live.verifyDestination must use the directory-only "
-                + "verifyOverwriteDestinationIsFile helper introduced by "
-                + "Slice A of the PR #25 architectural correction."
-        )
-    }
-
     func testVerifyOverwriteDestinationIsFileRejectsDirectory() throws {
         let temporaryDirectory = try makeTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: temporaryDirectory) }
@@ -700,19 +484,6 @@ final class CoordinatedReplaceWriterTests: XCTestCase {
         // refusal logic.
         try CoordinatedReplaceWriter
             .verifyOverwriteDestinationIsFile(at: fileURL)
-    }
-
-    func testLegacyFullPreflightStillExistsForCopyPath() {
-        // Copy() in iOSICloudStoragePlugin / macOSICloudStoragePlugin
-        // continues to call the legacy full pre-flight. This Slice A
-        // change must NOT delete or alter that helper.
-        let directoryURL = URL(fileURLWithPath: "/tmp/dir-\(UUID().uuidString)")
-        // Just confirm the symbol is callable — the behavior under
-        // real conflicts is exercised by existing copy-path tests.
-        XCTAssertNoThrow(
-            try? CoordinatedReplaceWriter
-                .verifyExistingDestinationCanBeReplaced(at: directoryURL)
-        )
     }
 
     func testLiveAutoResolveConflictErrorPreservesCoordinationDomain() {
@@ -786,6 +557,20 @@ final class CoordinatedReplaceWriterTests: XCTestCase {
     }
 
     // MARK: - Slice C: deadlock-free coord bridge contract
+
+    private func macOSPluginSource() throws -> String {
+        try String(
+            contentsOfFile: #filePath
+                .replacingOccurrences(
+                    of: "/Sources/icloud_storage_plus_foundation/Tests/"
+                        + "icloud_storage_plus_foundationTests/"
+                        + "CoordinatedReplaceWriterTests.swift",
+                    with: "/Sources/icloud_storage_plus/"
+                        + "macOSICloudStoragePlugin.swift"
+                ),
+            encoding: .utf8
+        )
+    }
 
     func testLiveCoordinateReplaceDoesNotStarveCooperativePool() async throws {
         let temporaryDirectory = try makeTemporaryDirectory()

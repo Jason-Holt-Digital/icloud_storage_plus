@@ -53,36 +53,6 @@ void main() {
       },
     );
 
-    test('maps timeout category to ICloudTimeoutException', () {
-      final exception = mapICloudPlatformException(buildError('timeout'));
-
-      expect(exception, isA<ICloudTimeoutException>());
-    });
-
-    test(
-      'maps itemNotDownloaded category to '
-      'ICloudItemNotDownloadedException',
-      () {
-        final exception = mapICloudPlatformException(
-          buildError('itemNotDownloaded'),
-        );
-
-        expect(exception, isA<ICloudItemNotDownloadedException>());
-      },
-    );
-
-    test(
-      'maps downloadInProgress category to '
-      'ICloudDownloadInProgressException',
-      () {
-        final exception = mapICloudPlatformException(
-          buildError('downloadInProgress'),
-        );
-
-        expect(exception, isA<ICloudDownloadInProgressException>());
-      },
-    );
-
     test(
       'maps explicit coordination category to ICloudCoordinationException',
       () {

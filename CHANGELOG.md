@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Breaking
+- Removed the read-side timeout/backoff parameters from `readInPlace` and
+  `readInPlaceBytes`. Reads now perform local iCloud Drive file access instead
+  of waiting for Apple metadata to report a fresh remote state.
+- Removed exported typed exceptions and platform-code constants for plugin-owned
+  iCloud readiness failures. Normal iCloud Drive lifecycle state is no longer a
+  plugin error surface.
+- Changed existing-destination `copy()` behavior on iOS and macOS: the copy
+  path no longer preflights iCloud download/current/conflict metadata or emits
+  retired readiness errors before replacement. Existing directory destinations
+  are rejected; placeholder, freshness, and conflict lifecycle states are left
+  to Foundation, and any actual replacement failure is surfaced from the local
+  operation.
+
+### Changed
+- iOS and macOS reads no longer wait for `.current` before opening the local
+  document.
+- iOS and macOS writes no longer run a plugin-owned wait before coordinated
+  replacement. iCloud Drive sync lifecycle remains Apple's responsibility.
+- Copy-over-existing-destination now uses the same local-file boundary: it
+  rejects directory replacements, then lets Foundation perform the copy/replace
+  rather than preflighting iCloud download/current metadata.
+
+### Removed
+- Removed the internal iCloud readiness helper and its synthetic timeout error
+  path.
+
 ## [2.1.3] - 2026-05-03
 
 ### Fixed
@@ -26,11 +53,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [2.1.2] - 2026-04-23
 
 ### Fixed
-- iOS `readInPlace` and `readInPlaceBytes` now marshal the post-download
+- iOS `readInPlace` and `readInPlaceBytes` now marshal the post-materialization
   continuation back onto the main actor before invoking
   `readInPlaceDocument` / `readInPlaceBinaryDocument`. The `2.1.0` async
-  rewrite of `waitForDownloadCompletion` inadvertently removed the
-  `DispatchQueue.main` hop that the callback-based waiter guaranteed,
+  rewrite of the previous readiness helper inadvertently removed the
+  `DispatchQueue.main` hop that the callback-based helper guaranteed,
   letting `UIDocument.open(completionHandler:)` be called from the Swift
   cooperative pool. This restores the `1.2.2` invariant that `UIDocument`
   work runs under the main queue per Apple's completion-handler contract
@@ -56,8 +83,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [2.1.0] - 2026-04-22
 
 Non-breaking behavior upgrade: `writeInPlace` becomes symmetric with
-`readInPlace` by proactively downloading non-current iCloud items and
-resolving unresolved conflict versions before the coordinated replace.
+`readInPlace` by proactively preparing existing iCloud items before the
+coordinated replace.
 Public Dart API unchanged.
 
 ### Added
@@ -68,30 +95,22 @@ Public Dart API unchanged.
   `ICloudInvalidArgumentException`.
 
 ### Changed
-- `writeInPlace` and the binary / streaming overwrite paths now
-  proactively call `startDownloadingUbiquitousItem` when the
-  destination is ubiquitous and not current, waiting for the download
-  using an interactive-write schedule (~32s max) before the
-  coordinated replace.
+- `writeInPlace` and the binary / streaming overwrite paths now proactively
+  prepare existing ubiquitous destinations before the coordinated replace.
 - Inside the coordinator write block, the overwrite path now calls
   Apple's canonical conflict-resolution pattern
   (`NSFileVersion.unresolvedConflictVersionsOfItem` → `replaceItem` →
   `isResolved = true` → `removeOtherVersionsOfItem`) before invoking
   `replaceItemAt`, symmetric with the existing `readInPlace` behavior.
-- The pre-flight `E_CONFLICT`, `E_NOT_DOWNLOADED`, and
-  `E_DOWNLOAD_IN_PROGRESS` errors now fire only as last-resort
-  signals: when auto-download or auto-resolution itself fails.
-  Auto-resolution failures surface with a localized description
-  containing "auto-resolution failed" while still mapping to
-  `ICloudConflictException` on the Dart side.
+- Pre-flight conflict errors now fire only as last-resort signals when
+  automatic conflict handling itself fails. Auto-resolution failures surface
+  with a localized description containing "auto-resolution failed" while still
+  mapping to `ICloudConflictException` on the Dart side.
 - Internal refactor: unified the four textual copies of
   `CoordinatedReplaceWriter.swift` into a single source of truth per
   platform (iOS and macOS) shared via SPM `target.sources`.
-- Internal refactor: extracted `waitForDownloadCompletion` and
-  `resolveUnresolvedConflicts` as shared `async throws` helpers.
-  Introduced `DownloadSchedule.interactiveWrite` and
-  `DownloadSchedule.backgroundRead` named configs so read and write
-  paths parameterize the same waiter rather than diverge.
+- Internal refactor: extracted shared async helpers for readiness handling and
+  unresolved-conflict resolution.
 - `ICloudDocument.resolveConflicts()` (iOS) and the equivalent macOS
   observer both call the shared resolver; the duplicate implementation
   on iOS has been removed.
@@ -103,9 +122,7 @@ Public Dart API unchanged.
 
 ### Fixed
 - iOS and macOS overwrite-path completion handlers now preserve structured
-  timeout mapping so download-wait timeouts surface as
-  `ICloudTimeoutException` / `E_TIMEOUT` instead of degrading to
-  generic native failures.
+  native failure details instead of degrading to generic native failures.
 - CocoaPods packaging now explicitly includes the shared foundation sources
   needed by the coordinated overwrite implementation.
 
@@ -152,20 +169,20 @@ macOS.
 - iOS and macOS existing-file `writeDocument`, `writeInPlace`, and
   `writeInPlaceBytes` now stage replacement content outside the ubiquity
   container and replace the destination through coordinated atomic replacement.
-- iOS and macOS keep the `1.2.2` download-wait completion fix that dispatches
+- iOS and macOS keep the `1.2.2` document-open completion fix that dispatches
   `UIDocument` completion back onto `DispatchQueue.main`, avoiding the
   `_os_object_retain` resurrection crash from short-lived local queues.
 - On iOS and macOS, file-write overwrite APIs now reject existing directory
   destinations instead of replacing them.
-- On iOS and macOS, existing ubiquitous items must be `.current` before
-  replacement, and `.downloaded` is now rejected as not yet replace-safe.
+- On iOS and macOS, existing ubiquitous-item replacement semantics were
+  tightened in this release.
 - iOS and macOS `copy()` now keep existing destinations inside coordinated
   atomic replacement flows instead of removing the destination before copying.
 
 ## [1.2.2] - 2026-03-30
 
 ### Fixed
-- iOS and macOS download-wait completion no longer uses a local
+- iOS and macOS document-open completion no longer uses a local
   `DispatchQueue`. The short-lived queue could be deallocated before
   `UIDocument.openWithCompletionHandler:` finished retaining it (via the
   deprecated `dispatch_get_current_queue` call in UIKit internals), causing
@@ -308,8 +325,8 @@ Dev linting moved to `very_good_analysis`.
 - Coordinated in-place access for small files:
   - `readInPlace()` / `writeInPlace()` (String, UTF-8)
   - `readInPlaceBytes()` / `writeInPlaceBytes()` (Uint8List)
-  - Optional `idleTimeouts` + `retryBackoff` to control download watchdog/retry
-    behavior; stalled downloads surface `E_TIMEOUT`.
+  - Former optional read readiness tuning parameters were available in this
+    release and have since been removed.
 - Convenience `rename()` API (implemented in Dart via `move()`).
 - Additional iCloud sync-state fields on `ICloudFile`:
   - `downloadStatus`, `isDownloading`
@@ -317,7 +334,6 @@ Dev linting moved to `very_good_analysis`.
   - `hasUnresolvedConflicts`
 - New public error code constants:
   - `PlatformExceptionCode.initializationError` (`E_INIT`)
-  - `PlatformExceptionCode.timeout` (`E_TIMEOUT`)
 - Documentation overhaul:
   - README updated to match the real API surface and semantics
   - DeepWiki badge added to the README

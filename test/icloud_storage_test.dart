@@ -103,8 +103,6 @@ class MockICloudStoragePlatform
   Future<String?> readInPlace({
     required String containerId,
     required String relativePath,
-    List<Duration>? idleTimeouts,
-    List<Duration>? retryBackoff,
   }) async {
     _readInPlaceRelativePath = relativePath;
     _calls.add('readInPlace');
@@ -115,8 +113,6 @@ class MockICloudStoragePlatform
   Future<Uint8List?> readInPlaceBytes({
     required String containerId,
     required String relativePath,
-    List<Duration>? idleTimeouts,
-    List<Duration>? retryBackoff,
   }) async {
     _readInPlaceRelativePath = relativePath;
     _calls.add('readInPlaceBytes');
