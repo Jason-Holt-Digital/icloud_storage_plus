@@ -14,6 +14,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Removed exported typed exceptions and platform-code constants for plugin-owned
   iCloud readiness failures. Normal iCloud Drive lifecycle state is no longer a
   plugin error surface.
+- Changed existing-destination `copy()` behavior on iOS and macOS: the copy
+  path no longer preflights iCloud download/current/conflict metadata or emits
+  retired readiness errors before replacement. Existing directory destinations
+  are rejected; placeholder, freshness, and conflict lifecycle states are left
+  to Foundation, and any actual replacement failure is surfaced from the local
+  operation.
 
 ### Changed
 - iOS and macOS reads no longer wait for `.current` before opening the local
