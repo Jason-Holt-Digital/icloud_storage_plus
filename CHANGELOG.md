@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.2.0] - 2026-05-26
+
+Corrective release for the readiness/error-reporting API introduced in
+`2.0.0`. That surface treated normal iCloud Drive lifecycle state as
+plugin-owned failures; this release removes it and restores the intended local
+file-operation boundary.
+
 ### Breaking
 - Removed the read-side timeout/backoff parameters from `readInPlace` and
   `readInPlaceBytes`. Reads now perform local iCloud Drive file access instead

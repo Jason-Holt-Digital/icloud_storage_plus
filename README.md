@@ -111,7 +111,7 @@ filesystem work for the in-place APIs runs there so iCloud container lookup and
 available, Flutter falls back to its default platform-channel dispatch model.
 macOS keeps the existing dispatch model.
 
-## Migration notes
+## Migration notes for 2.2.0
 
 - `readInPlace` and `readInPlaceBytes` no longer accept `idleTimeouts` or
   `retryBackoff`. Remove those named arguments from callers.
