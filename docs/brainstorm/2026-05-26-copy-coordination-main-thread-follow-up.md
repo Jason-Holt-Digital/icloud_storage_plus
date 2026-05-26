@@ -82,6 +82,26 @@ iCloud Drive lifecycle state remains Apple-owned. The copy follow-up should only
 move local file coordination and local file I/O off the main actor while
 preserving Foundation's operation result.
 
+## Review triage
+
+Real issues:
+
+- `copy()` runs synchronous file coordination and filesystem work from the
+  main-actor container-resolution callback on both iOS and macOS.
+- `copy()` lacks the `CompletionGate` pattern now used by `delete()` and
+  `move()`. The practical risk is defensive rather than the common path: an
+  accessor result and a post-coordination error should be mutually exclusive,
+  but the code does not make single delivery explicit.
+
+Not accepted as a fix direction:
+
+- Restoring metadata preflights for placeholder, not-downloaded, downloading,
+  non-current, or conflicted iCloud items. That would rebuild the plugin-owned
+  readiness layer PR #40 is removing. If `FileManager.replaceItemAt(...)` or
+  `NSFileCoordinator` fails for a local operation, surface that actual
+  Foundation failure. Do not manufacture an earlier readiness failure from
+  iCloud metadata.
+
 ## Likely fix shape
 
 A focused implementation should:
@@ -108,4 +128,3 @@ generic readiness or sync abstraction.
 - Add focused coverage only for behavior the plugin owns, such as single result
   delivery and coordinator-error mapping. Do not add tests whose only purpose is
   proving removed readiness behavior stayed removed.
-
