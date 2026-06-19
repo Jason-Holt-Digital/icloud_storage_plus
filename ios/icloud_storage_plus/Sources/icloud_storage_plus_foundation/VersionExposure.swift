@@ -73,13 +73,42 @@ extension VersionExposure {
     /// and Base64-encoding the result produces a stable, round-trippable
     /// string for any valid `NSFileVersion`.
     static func identifier(for version: NSFileVersion) -> String {
+        archiveIdentifier(version.persistentIdentifier) ?? ""
+    }
+
+    /// Archives an opaque `NSFileVersion.persistentIdentifier` into a
+    /// deterministic base64 string. Returns nil if the identifier cannot
+    /// be archived. `persistentIdentifier` is an opaque `Any` backed by a
+    /// private Apple class; archiving (rather than casting to
+    /// `[String: Any]`) is the only way to produce a stable, round-
+    /// trippable identifier for version selection on copy-out.
+    static func archiveIdentifier(_ identifier: Any) -> String? {
         guard let data = try? NSKeyedArchiver.archivedData(
-            withRootObject: version.persistentIdentifier,
+            withRootObject: identifier,
             requiringSecureCoding: false
         ) else {
-            return ""
+            return nil
         }
         return data.base64EncodedString()
+    }
+
+    /// Unarchives a base64 identifier back into the opaque
+    /// `persistentIdentifier` object. Used for diagnostics/tests; copy-out
+    /// matches by re-archiving each candidate version, not by unarchiving.
+    static func unarchiveIdentifier(_ string: String) -> Any? {
+        guard let data = Data(base64Encoded: string) else {
+            return nil
+        }
+        guard let unarchiver = try? NSKeyedUnarchiver(forReadingFrom: data)
+        else {
+            return nil
+        }
+        unarchiver.requiresSecureCoding = false
+        let result = unarchiver.decodeObject(
+            forKey: NSKeyedArchiveRootObjectKey
+        )
+        unarchiver.finishDecoding()
+        return result
     }
 
     /// Typed error for "no unresolved version matched the identifier"
@@ -116,6 +145,18 @@ extension VersionExposure {
             guard let versions =
                 NSFileVersion.unresolvedConflictVersionsOfItem(at: itemURL)
             else {
+                throw versionNotFoundError(itemURL: itemURL)
+            }
+            // The caller passes back a descriptor `identifier` produced
+            // by `identifier(for:)`. Match by recomputing each candidate
+            // version's serialized identifier and comparing by string
+            // equality (deterministic, independent of the opaque
+            // persistentIdentifier type's `isEqual`). An empty identifier
+            // (archival failure / nil persistentIdentifier) cannot
+            // reliably select a version, so surface a typed not-found
+            // error rather than falsely matching the first version that
+            // also serializes to empty.
+            guard !identifier.isEmpty else {
                 throw versionNotFoundError(itemURL: itemURL)
             }
             guard let version = versions.first(

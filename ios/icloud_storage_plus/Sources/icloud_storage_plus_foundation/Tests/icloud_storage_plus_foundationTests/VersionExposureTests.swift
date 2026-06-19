@@ -266,6 +266,56 @@ final class VersionExposureTests: XCTestCase {
         )
     }
 
+    // MARK: - Identifier serialization round-trip (VAL-MUT-018/019)
+    //
+    // `NSFileVersion.persistentIdentifier` is an opaque `Any` backed by a
+    // private Apple class. These tests exercise the archive/unarchive
+    // helpers that make the descriptor `identifier` round-trip through
+    // Dart and select the correct version on copy-out. A real
+    // `NSFileVersion` cannot be constructed offline (it requires an
+    // iCloud-conflicted file), so the helpers are tested with a stand-in
+    // `NSSecureCoding` object; the live `NSFileVersion` path uses the
+    // same helpers.
+
+    func testArchiveIdentifierRoundTripsForSecureCodingObject() {
+        let payload: NSDictionary = [
+            "scope": "Documents",
+            "name": "journal.json",
+            "revision": 42 as NSNumber,
+        ]
+
+        guard let archived = VersionExposure.archiveIdentifier(payload) else {
+            XCTFail("archiveIdentifier must succeed for an NSDictionary")
+            return
+        }
+        XCTAssertFalse(archived.isEmpty)
+
+        guard let unarchived = VersionExposure.unarchiveIdentifier(archived)
+        else {
+            XCTFail("unarchiveIdentifier must round-trip the archived data")
+            return
+        }
+        XCTAssertEqual(unarchived as? NSDictionary, payload)
+    }
+
+    func testArchiveIdentifierIsDeterministicAndDistinctPerPayload() {
+        let a: NSDictionary = ["name": "a.json"]
+        let b: NSDictionary = ["name": "b.json"]
+
+        let idA1 = VersionExposure.archiveIdentifier(a)
+        let idA2 = VersionExposure.archiveIdentifier(a)
+        let idB = VersionExposure.archiveIdentifier(b)
+
+        XCTAssertNotNil(idA1)
+        XCTAssertEqual(idA1, idA2, "archival must be deterministic")
+        XCTAssertNotNil(idB)
+        XCTAssertNotEqual(idA1, idB, "distinct payloads must archive distinctly")
+    }
+
+    func testUnarchiveIdentifierReturnsNilForInvalidBase64() {
+        XCTAssertNil(VersionExposure.unarchiveIdentifier("not-valid-base64!!"))
+    }
+
     // MARK: - helpers
 
     private func makeTemporaryDirectory() throws -> URL {
