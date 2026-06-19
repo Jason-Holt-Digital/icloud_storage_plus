@@ -6,7 +6,7 @@ import Foundation
 /// download via `FileManager.startDownloadingUbiquitousItem(at:)`. This
 /// is a REQUEST, not a deadline: the caller returns immediately and
 /// imposes no artificial timeout/watchdog. Normal iCloud lifecycle
-/// states (notDownloaded, downloading, placeholder) NEVER become plugin
+/// states (notDownloaded, downloading) NEVER become plugin
 /// errors — Apple owns sync/materialization.
 ///
 /// DI-via-closures (same idiom as `CoordinatedReplaceWriter`): XCTest
@@ -26,8 +26,6 @@ struct UbiquitousItemMaterializer {
         case notDownloaded
         /// Download is in progress.
         case downloading
-        /// Dataless APFS placeholder (treated as not-yet-current).
-        case placeholder
     }
 
     typealias DownloadStatusProvider = (URL) -> Status

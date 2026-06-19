@@ -54,7 +54,6 @@ final class UbiquitousItemMaterializerTests: XCTestCase {
         let normalStates: [UbiquitousItemMaterializer.Status] = [
             .notDownloaded,
             .downloading,
-            .placeholder,
             .downloaded,
         ]
 
@@ -113,7 +112,7 @@ final class UbiquitousItemMaterializerTests: XCTestCase {
     func testWriteAgainstNotCurrentRequestsDownloadNoConflictError() throws {
         var requestedURL: URL?
         let materializer = UbiquitousItemMaterializer(
-            downloadStatus: { _ in .placeholder },
+            downloadStatus: { _ in .downloaded },
             startDownloading: { url in
                 requestedURL = url
             }
@@ -123,7 +122,7 @@ final class UbiquitousItemMaterializerTests: XCTestCase {
             at: itemURL
         )
 
-        XCTAssertEqual(status, .placeholder)
+        XCTAssertEqual(status, .downloaded)
         XCTAssertEqual(requestedURL, itemURL)
         // No conflict/lifecycle error is thrown (XCTAssertNoThrow above).
     }

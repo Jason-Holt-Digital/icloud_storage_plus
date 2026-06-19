@@ -67,10 +67,19 @@ extension VersionExposure {
     /// Deterministic serialization of an `NSFileVersion`'s
     /// `persistentIdentifier` so the descriptor `identifier` round-trips
     /// through Dart and back into a version match on copy-out.
+    ///
+    /// `persistentIdentifier` is an opaque `Any` whose concrete runtime
+    /// type is a private Apple class. Archiving with `NSKeyedArchiver`
+    /// and Base64-encoding the result produces a stable, round-trippable
+    /// string for any valid `NSFileVersion`.
     static func identifier(for version: NSFileVersion) -> String {
-        let pid = version.persistentIdentifier as? [String: Any] ?? [:]
-        return pid.keys.sorted().map { "\($0):\(String(describing: pid[$0]))" }
-            .joined(separator: "|")
+        guard let data = try? NSKeyedArchiver.archivedData(
+            withRootObject: version.persistentIdentifier,
+            requiringSecureCoding: false
+        ) else {
+            return ""
+        }
+        return data.base64EncodedString()
     }
 
     /// Typed error for "no unresolved version matched the identifier"
