@@ -7,6 +7,7 @@ import 'package:icloud_storage_plus/models/container_item.dart';
 import 'package:icloud_storage_plus/models/exceptions.dart';
 import 'package:icloud_storage_plus/models/gather_result.dart';
 import 'package:icloud_storage_plus/models/icloud_file.dart';
+import 'package:icloud_storage_plus/models/icloud_version.dart';
 import 'package:icloud_storage_plus/models/transfer_progress.dart';
 import 'package:logging/logging.dart';
 
@@ -445,6 +446,55 @@ class MethodChannelICloudStorage extends ICloudStoragePlatform {
       for (final entry in mapList)
         if (entry is Map<dynamic, dynamic>) ContainerItem.fromMap(entry),
     ];
+  }
+
+  @override
+  Future<List<ICloudVersion>> enumerateUnresolvedConflictVersions({
+    required String containerId,
+    required String relativePath,
+  }) async {
+    final mapList = await _invokeListMethod<dynamic>(
+      'enumerateUnresolvedConflictVersions',
+      {
+        'containerId': containerId,
+        'relativePath': relativePath,
+      },
+    );
+
+    if (mapList == null) return [];
+
+    return [
+      for (final entry in mapList)
+        if (entry is Map<dynamic, dynamic>) ICloudVersion.fromMap(entry),
+    ];
+  }
+
+  @override
+  Future<void> copyConflictVersion({
+    required String containerId,
+    required String relativePath,
+    required String versionIdentifier,
+    required String destinationPath,
+  }) async {
+    await _invokeMethod<void>('copyConflictVersion', {
+      'containerId': containerId,
+      'relativePath': relativePath,
+      'versionIdentifier': versionIdentifier,
+      'destinationPath': destinationPath,
+    });
+  }
+
+  @override
+  Future<void> markConflictResolved({
+    required String containerId,
+    required String relativePath,
+    bool removeOtherVersions = false,
+  }) async {
+    await _invokeMethod<void>('markConflictResolved', {
+      'containerId': containerId,
+      'relativePath': relativePath,
+      'removeOtherVersions': removeOtherVersions,
+    });
   }
 
   /// Private method to convert the list of maps from platform code to a list of

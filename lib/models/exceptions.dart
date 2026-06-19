@@ -18,7 +18,10 @@ class PlatformExceptionCode {
   /// in to iCloud, or user denied iCloud permission for this app
   static const String iCloudConnectionOrPermission = 'E_CTR';
 
-  /// The code indicates the operation failed due to a coordination conflict.
+  /// The code indicates a version-exposure failure (conflict enumeration,
+  /// copy-out, or mark-resolved). The auto-resolve producer that previously
+  /// emitted this code has been removed; the plugin only exposes versions
+  /// and never auto-resolves-and-deletes losing versions.
   static const String conflict = 'E_CONFLICT';
 
   /// The code indicates file coordination failed.
@@ -146,7 +149,10 @@ class ICloudContainerAccessException extends ICloudOperationException {
         );
 }
 
-/// Thrown when file coordination detects a conflict.
+/// Thrown when a version-exposure primitive (enumerate / copy-out /
+/// mark-resolved) fails. The plugin only EXPOSES `NSFileVersion`s; it never
+/// auto-resolves or silently deletes losing versions, so this exception never
+/// represents an auto-resolved outcome.
 class ICloudConflictException extends ICloudOperationException {
   /// Creates a conflict exception.
   ICloudConflictException._(_ICloudOperationExceptionData data)

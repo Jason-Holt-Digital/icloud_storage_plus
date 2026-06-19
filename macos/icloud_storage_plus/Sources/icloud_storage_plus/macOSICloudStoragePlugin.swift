@@ -23,10 +23,6 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
     queue.qualityOfService = .userInitiated
     return queue
   }()
-  private let fileCoordinatorQueue = DispatchQueue(
-    label: "icloud_storage_plus.file_coordinator",
-    qos: .userInitiated
-  )
   private let ubiquityContainerResolver: UbiquityContainerResolver
 
   init(
@@ -90,6 +86,12 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
       getItemMetadata(call, result)
     case "listContents":
       listContents(call, result)
+    case "enumerateUnresolvedConflictVersions":
+      enumerateUnresolvedConflictVersions(call, result)
+    case "copyConflictVersion":
+      copyConflictVersion(call, result)
+    case "markConflictResolved":
+      markConflictResolved(call, result)
     default:
       result(FlutterMethodNotImplemented)
     }
@@ -457,25 +459,48 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
       }
 
       DebugHelper.log("containerURL: \(cloudFileURL.deletingLastPathComponent().path)")
-      writeDocument(at: cloudFileURL, sourceURL: localFileURL) { error in
-        if let error = error {
-          let mapped = self.nativeCodeError(
-            error,
-            operation: "uploadFile",
-            relativePath: cloudRelativePath
+      do {
+        // Request proactive materialization (request, not a deadline)
+        // for a not-yet-`.current` upload destination.
+        do {
+          _ = try UbiquitousItemMaterializer.live
+            .requestMaterializationIfNeeded(at: cloudFileURL)
+        } catch {
+          DebugHelper.log(
+            "uploadFile materialization request failed: "
+              + "\(error.localizedDescription)"
           )
-          result(mapped)
-        } else {
-          // Set up progress monitoring if needed
-          if !eventChannelName.isEmpty {
-            self.setupUploadProgressMonitoring(
-              cloudFileURL: cloudFileURL,
-              cloudRelativePath: cloudRelativePath,
-              eventChannelName: eventChannelName
-            )
-          }
-          result(nil)
         }
+
+        try await PerPathMutationLane.shared.withLane(for: cloudFileURL) {
+          try await withCheckedThrowingContinuation {
+            (cont: CheckedContinuation<Void, Error>) in
+            self.writeDocument(at: cloudFileURL, sourceURL: localFileURL) {
+              error in
+              if let error {
+                cont.resume(throwing: error)
+              } else {
+                cont.resume()
+              }
+            }
+          }
+        }
+        // Set up progress monitoring if needed
+        if !eventChannelName.isEmpty {
+          self.setupUploadProgressMonitoring(
+            cloudFileURL: cloudFileURL,
+            cloudRelativePath: cloudRelativePath,
+            eventChannelName: eventChannelName
+          )
+        }
+        result(nil)
+      } catch {
+        let mapped = self.nativeCodeError(
+          error,
+          operation: "uploadFile",
+          relativePath: cloudRelativePath
+        )
+        result(mapped)
       }
     }
   }
@@ -783,18 +808,42 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
         return
       }
 
-      writeInPlaceDocument(at: fileURL, contents: contents) { [self] error in
-        if let error = error {
-          let mapped = mapNativeWriteError(
-            error,
-            operation: "writeInPlace",
-            relativePath: relativePath,
-            destinationURL: fileURL
+      do {
+        // Request proactive materialization for a not-yet-`.current`
+        // item (request, not a deadline). A failed request is logged
+        // and never blocks the write — normal lifecycle states are not
+        // errors (VAL-MUT-030/031/032/033).
+        do {
+          _ = try UbiquitousItemMaterializer.live
+            .requestMaterializationIfNeeded(at: fileURL)
+        } catch {
+          DebugHelper.log(
+            "writeInPlace materialization request failed: "
+              + "\(error.localizedDescription)"
           )
-          result(mapped)
-          return
+        }
+
+        try await PerPathMutationLane.shared.withLane(for: fileURL) {
+          try await withCheckedThrowingContinuation {
+            (cont: CheckedContinuation<Void, Error>) in
+            self.writeInPlaceDocument(at: fileURL, contents: contents) {
+              error in
+              if let error {
+                cont.resume(throwing: error)
+              } else {
+                cont.resume()
+              }
+            }
+          }
         }
         result(nil)
+      } catch {
+        result(mapNativeWriteError(
+          error,
+          operation: "writeInPlace",
+          relativePath: relativePath,
+          destinationURL: fileURL
+        ))
       }
     }
   }
@@ -870,19 +919,43 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
         return
       }
 
-      writeInPlaceBinaryDocument(at: fileURL, contents: contents.data) {
-        [self] error in
-        if let error = error {
-          let mapped = mapNativeWriteError(
-            error,
-            operation: "writeInPlaceBytes",
-            relativePath: relativePath,
-            destinationURL: fileURL
+      do {
+        // Request proactive materialization (request, not a deadline).
+        // A failed request is logged and never blocks the write
+        // (VAL-MUT-030/031/032/033).
+        do {
+          _ = try UbiquitousItemMaterializer.live
+            .requestMaterializationIfNeeded(at: fileURL)
+        } catch {
+          DebugHelper.log(
+            "writeInPlaceBytes materialization request failed: "
+              + "\(error.localizedDescription)"
           )
-          result(mapped)
-          return
+        }
+
+        try await PerPathMutationLane.shared.withLane(for: fileURL) {
+          try await withCheckedThrowingContinuation {
+            (cont: CheckedContinuation<Void, Error>) in
+            self.writeInPlaceBinaryDocument(
+              at: fileURL,
+              contents: contents.data
+            ) { error in
+              if let error {
+                cont.resume(throwing: error)
+              } else {
+                cont.resume()
+              }
+            }
+          }
         }
         result(nil)
+      } catch {
+        result(mapNativeWriteError(
+          error,
+          operation: "writeInPlaceBytes",
+          relativePath: relativePath,
+          destinationURL: fileURL
+        ))
       }
     }
   }
@@ -1165,6 +1238,135 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
     }
   }
 
+  /// Enumerates unresolved `NSFileVersion` conflict versions for an item
+  /// and returns stable descriptors (identifier + modificationDate).
+  /// An item with no unresolved versions returns an empty list (not an
+  /// error). Conflict policy is app-owned; the plugin only exposes.
+  private func enumerateUnresolvedConflictVersions(
+    _ call: FlutterMethodCall, _ result: @escaping FlutterResult
+  ) {
+    guard let args = call.arguments as? Dictionary<String, Any>,
+          let containerId = args["containerId"] as? String,
+          let relativePath = args["relativePath"] as? String
+    else {
+      result(argumentError)
+      return
+    }
+
+    resolveContainerURL(
+      containerId: containerId,
+      operation: "enumerateUnresolvedConflictVersions",
+      relativePath: relativePath,
+      result: result
+    ) { containerURL in
+      let fileURL = containerURL.appendingPathComponent(relativePath)
+      do {
+        let descriptors = try VersionExposure.live.enumerate(at: fileURL)
+        result(descriptors.map { descriptor -> [String: Any?] in
+          [
+            "identifier": descriptor.identifier,
+            "modificationDate": descriptor.modificationDate?
+              .timeIntervalSince1970,
+          ]
+        })
+      } catch {
+        result(self.nativeCodeError(
+          error,
+          operation: "enumerateUnresolvedConflictVersions",
+          relativePath: relativePath
+        ))
+      }
+    }
+  }
+
+  /// Copies a specific losing version's bytes to a CALLER-PROVIDED
+  /// destination URL, leaving the live item untouched. The app owns the
+  /// destination path (typically a badged backup under Documents/backups/).
+  private func copyConflictVersion(
+    _ call: FlutterMethodCall, _ result: @escaping FlutterResult
+  ) {
+    guard let args = call.arguments as? Dictionary<String, Any>,
+          let containerId = args["containerId"] as? String,
+          let relativePath = args["relativePath"] as? String,
+          let versionIdentifier = args["versionIdentifier"] as? String,
+          let destinationPath = args["destinationPath"] as? String
+    else {
+      result(argumentError)
+      return
+    }
+
+    resolveContainerURL(
+      containerId: containerId,
+      operation: "copyConflictVersion",
+      relativePath: relativePath,
+      result: result
+    ) { containerURL in
+      let fileURL = containerURL.appendingPathComponent(relativePath)
+      let destinationURL = URL(fileURLWithPath: destinationPath)
+      do {
+        let destinationDir = destinationURL.deletingLastPathComponent()
+        if !FileManager.default.fileExists(atPath: destinationDir.path) {
+          try FileManager.default.createDirectory(
+            at: destinationDir,
+            withIntermediateDirectories: true,
+            attributes: nil
+          )
+        }
+        try VersionExposure.live.copyOut(
+          itemURL: fileURL,
+          identifier: versionIdentifier,
+          to: destinationURL
+        )
+        result(nil)
+      } catch {
+        result(self.nativeCodeError(
+          error,
+          operation: "copyConflictVersion",
+          relativePath: relativePath
+        ))
+      }
+    }
+  }
+
+  /// Marks unresolved conflict versions resolved (`isResolved = true`)
+  /// and, when `removeOtherVersions` is true, removes the other versions.
+  /// Invoked ONLY on explicit app request; idempotent and a no-op when
+  /// nothing is unresolved. The app must back up losing versions first.
+  private func markConflictResolved(
+    _ call: FlutterMethodCall, _ result: @escaping FlutterResult
+  ) {
+    guard let args = call.arguments as? Dictionary<String, Any>,
+          let containerId = args["containerId"] as? String,
+          let relativePath = args["relativePath"] as? String
+    else {
+      result(argumentError)
+      return
+    }
+    let removeOtherVersions = (args["removeOtherVersions"] as? Bool) ?? false
+
+    resolveContainerURL(
+      containerId: containerId,
+      operation: "markConflictResolved",
+      relativePath: relativePath,
+      result: result
+    ) { containerURL in
+      let fileURL = containerURL.appendingPathComponent(relativePath)
+      do {
+        try VersionExposure.live.markResolved(
+          at: fileURL,
+          removeOthers: removeOtherVersions
+        )
+        result(nil)
+      } catch {
+        result(self.nativeCodeError(
+          error,
+          operation: "markConflictResolved",
+          relativePath: relativePath
+        ))
+      }
+    }
+  }
+
   /// Resolves the real filename from an iCloud placeholder name.
   ///
   /// On iOS and pre-Sonoma macOS, non-downloaded files appear as
@@ -1208,7 +1410,8 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
     }
   }
   
-  /// Deletes an item from the container with coordination.
+  /// Deletes an item from the container with coordination, serialized on
+  /// the per-path mutation lane (VAL-MUT-002/005/050/051).
   private func delete(_ call: FlutterMethodCall, _ result: @escaping FlutterResult) {
     guard let args = call.arguments as? Dictionary<String, Any>,
           let containerId = args["containerId"] as? String,
@@ -1217,7 +1420,7 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
       result(argumentError)
       return
     }
-    
+
     resolveContainerURL(
       containerId: containerId,
       operation: "delete",
@@ -1227,58 +1430,80 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
       DebugHelper.log("containerURL: \(containerURL.path)")
 
       let fileURL = containerURL.appendingPathComponent(relativePath)
-      let completionGate = CompletionGate()
-      let completeOnce: (Any?) -> Void = { value in
-        guard completionGate.tryComplete() else { return }
-        DispatchQueue.main.async { result(value) }
-      }
 
-      fileCoordinatorQueue.async { [self] in
-        guard FileManager.default.fileExists(atPath: fileURL.path) else {
-          completeOnce(itemNotFoundError(
-            operation: "delete",
-            relativePath: relativePath
-          ))
-          return
-        }
-
-        let fileCoordinator = NSFileCoordinator(filePresenter: nil)
-        var coordinationError: NSError?
-        fileCoordinator.coordinate(
-          writingItemAt: fileURL,
-          options: NSFileCoordinator.WritingOptions.forDeleting,
-          error: &coordinationError
-        ) { writingURL in
-          do {
-            try FileManager.default.removeItem(at: writingURL)
-            completeOnce(nil)
-          } catch {
-            DebugHelper.log("error: \(error.localizedDescription)")
-            let mapped = mapFileNotFoundError(
-              error,
-              operation: "delete",
-              relativePath: relativePath
-            ) ?? nativeCodeError(
-              error,
-              operation: "delete",
+      Task.detached { [self] in
+        do {
+          let value: Any? = try await PerPathMutationLane.shared.withLane(
+            for: fileURL
+          ) {
+            try await self.deleteCoordinated(
+              fileURL: fileURL,
               relativePath: relativePath
             )
-            completeOnce(mapped)
           }
-        }
-
-        if let coordinationError {
-          completeOnce(nativeCodeError(
-            coordinationError,
+          DispatchQueue.main.async { result(value) }
+        } catch {
+          let mapped = error as? FlutterError ?? self.nativeCodeError(
+            error,
             operation: "delete",
             relativePath: relativePath
-          ))
+          )
+          DispatchQueue.main.async { result(mapped) }
         }
       }
     }
   }
+
+  /// Coordinated delete honoring the coordinator closure URL. Throws a
+  /// typed `FlutterError` on coordination or IO failure (coordErr ??
+  /// ioErr — never a silent null/false success).
+  private func deleteCoordinated(
+    fileURL: URL,
+    relativePath: String
+  ) async throws -> Any? {
+    guard FileManager.default.fileExists(atPath: fileURL.path) else {
+      throw itemNotFoundError(operation: "delete", relativePath: relativePath)
+    }
+
+    let coordinator = NSFileCoordinator(filePresenter: nil)
+    var coordinationError: NSError?
+    var ioError: Error?
+
+    coordinator.coordinate(
+      writingItemAt: fileURL,
+      options: NSFileCoordinator.WritingOptions.forDeleting,
+      error: &coordinationError
+    ) { writingURL in
+      do {
+        try FileManager.default.removeItem(at: writingURL)
+      } catch {
+        ioError = error
+      }
+    }
+
+    if let coordinationError {
+      throw nativeCodeError(
+        coordinationError,
+        operation: "delete",
+        relativePath: relativePath
+      )
+    }
+    if let ioError {
+      throw mapFileNotFoundError(
+        ioError,
+        operation: "delete",
+        relativePath: relativePath
+      ) ?? nativeCodeError(
+        ioError,
+        operation: "delete",
+        relativePath: relativePath
+      )
+    }
+    return nil
+  }
   
-  /// Moves an item within the container.
+  /// Moves an item within the container, serialized against BOTH
+  /// endpoint per-path lanes (VAL-MUT-003/041/050/051/054).
   private func move(_ call: FlutterMethodCall, _ result: @escaping FlutterResult) {
     guard let args = call.arguments as? Dictionary<String, Any>,
           let containerId = args["containerId"] as? String,
@@ -1288,7 +1513,7 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
       result(argumentError)
       return
     }
-    
+
     resolveContainerURL(
       containerId: containerId,
       operation: "move",
@@ -1299,63 +1524,90 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
 
       let atURL = containerURL.appendingPathComponent(atRelativePath)
       let toURL = containerURL.appendingPathComponent(toRelativePath)
-      let completionGate = CompletionGate()
-      let completeOnce: (Any?) -> Void = { value in
-        guard completionGate.tryComplete() else { return }
-        DispatchQueue.main.async { result(value) }
-      }
 
-      fileCoordinatorQueue.async { [self] in
-        guard FileManager.default.fileExists(atPath: atURL.path) else {
-          completeOnce(itemNotFoundError(
-            operation: "move",
-            relativePath: atRelativePath
-          ))
-          return
-        }
-
-        let fileCoordinator = NSFileCoordinator(filePresenter: nil)
-        var coordinationError: NSError?
-        fileCoordinator.coordinate(
-          writingItemAt: atURL,
-          options: NSFileCoordinator.WritingOptions.forMoving,
-          writingItemAt: toURL,
-          options: NSFileCoordinator.WritingOptions.forReplacing,
-          error: &coordinationError
-        ) { atWritingURL, toWritingURL in
-          do {
-            let toDirURL = toWritingURL.deletingLastPathComponent()
-            if !FileManager.default.fileExists(atPath: toDirURL.path) {
-              try FileManager.default.createDirectory(
-                at: toDirURL,
-                withIntermediateDirectories: true,
-                attributes: nil
-              )
-            }
-            try FileManager.default.moveItem(at: atWritingURL, to: toWritingURL)
-            completeOnce(nil)
-          } catch {
-            DebugHelper.log("error: \(error.localizedDescription)")
-            completeOnce(nativeCodeError(
-              error,
-              operation: "move",
-              relativePath: atRelativePath
-            ))
+      Task.detached { [self] in
+        do {
+          let value: Any? = try await PerPathMutationLane.shared.withLanes(
+            for: atURL,
+            and: toURL
+          ) {
+            try await self.moveCoordinated(
+              atURL: atURL,
+              toURL: toURL,
+              atRelativePath: atRelativePath
+            )
           }
-        }
-
-        if let coordinationError {
-          completeOnce(nativeCodeError(
-            coordinationError,
+          DispatchQueue.main.async { result(value) }
+        } catch {
+          let mapped = error as? FlutterError ?? self.nativeCodeError(
+            error,
             operation: "move",
             relativePath: atRelativePath
-          ))
+          )
+          DispatchQueue.main.async { result(mapped) }
         }
       }
     }
   }
+
+  /// Coordinated move honoring both coordinator closure URLs. Creates
+  /// the destination parent directory as needed. Throws a typed
+  /// `FlutterError` on coordination or IO failure; preserves the source
+  /// on mid-stage failure (VAL-MUT-054).
+  private func moveCoordinated(
+    atURL: URL,
+    toURL: URL,
+    atRelativePath: String
+  ) async throws -> Any? {
+    guard FileManager.default.fileExists(atPath: atURL.path) else {
+      throw itemNotFoundError(operation: "move", relativePath: atRelativePath)
+    }
+
+    let coordinator = NSFileCoordinator(filePresenter: nil)
+    var coordinationError: NSError?
+    var ioError: Error?
+
+    coordinator.coordinate(
+      writingItemAt: atURL,
+      options: NSFileCoordinator.WritingOptions.forMoving,
+      writingItemAt: toURL,
+      options: NSFileCoordinator.WritingOptions.forReplacing,
+      error: &coordinationError
+    ) { atWritingURL, toWritingURL in
+      do {
+        let toDirURL = toWritingURL.deletingLastPathComponent()
+        if !FileManager.default.fileExists(atPath: toDirURL.path) {
+          try FileManager.default.createDirectory(
+            at: toDirURL,
+            withIntermediateDirectories: true,
+            attributes: nil
+          )
+        }
+        try FileManager.default.moveItem(at: atWritingURL, to: toWritingURL)
+      } catch {
+        ioError = error
+      }
+    }
+
+    if let coordinationError {
+      throw nativeCodeError(
+        coordinationError,
+        operation: "move",
+        relativePath: atRelativePath
+      )
+    }
+    if let ioError {
+      throw nativeCodeError(
+        ioError,
+        operation: "move",
+        relativePath: atRelativePath
+      )
+    }
+    return nil
+  }
   
-  /// Copies an item within the container.
+  /// Copies an item within the container, serialized against BOTH
+  /// endpoint per-path lanes (VAL-MUT-004/041/050/051/054).
   private func copy(_ call: FlutterMethodCall, _ result: @escaping FlutterResult) {
     guard let args = call.arguments as? Dictionary<String, Any>,
           let containerId = args["containerId"] as? String,
@@ -1365,7 +1617,7 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
       result(argumentError)
       return
     }
-    
+
     resolveContainerURL(
       containerId: containerId,
       operation: "copy",
@@ -1375,104 +1627,143 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
       DebugHelper.log("containerURL: \(containerURL.path)")
 
       let fromURL = containerURL.appendingPathComponent(fromRelativePath)
-      guard FileManager.default.fileExists(atPath: fromURL.path) else {
-        result(itemNotFoundError(operation: "copy", relativePath: fromRelativePath))
-        return
-      }
-
       let toURL = containerURL.appendingPathComponent(toRelativePath)
-      let fileCoordinator = NSFileCoordinator(filePresenter: nil)
-      var handledExistingDestination = false
-      var overwriteError: Error?
-      var sourceCoordinationError: NSError?
 
-      fileCoordinator.coordinate(
-        readingItemAt: fromURL,
-        options: .withoutChanges,
-        error: &sourceCoordinationError
-      ) { fromReadingURL in
+      Task.detached { [self] in
         do {
-          handledExistingDestination = try copyOverwritingExistingItem(
-            from: fromReadingURL,
-            to: toURL
-          )
-        } catch {
-          overwriteError = error
-        }
-      }
-
-      if let sourceCoordinationError {
-        DebugHelper.log("copy source coordination error: \(sourceCoordinationError.localizedDescription)")
-        result(nativeCodeError(
-          sourceCoordinationError,
-          operation: "copy",
-          relativePath: fromRelativePath
-        ))
-        return
-      }
-
-      if let overwriteError {
-        DebugHelper.log("copy error: \(overwriteError.localizedDescription)")
-        result(nativeCodeError(
-          overwriteError,
-          operation: "copy",
-          relativePath: toRelativePath
-        ))
-        return
-      }
-
-      if handledExistingDestination {
-        result(nil)
-        return
-      }
-
-      // Use reading coordination for source and writing coordination for destination
-      var copyCoordinationError: NSError?
-      fileCoordinator.coordinate(
-        readingItemAt: fromURL,
-        options: .withoutChanges,
-        writingItemAt: toURL,
-        options: .forReplacing,
-        error: &copyCoordinationError
-      ) { fromReadingURL, toWritingURL in
-        do {
-          // Create destination directory if needed
-          let toDirURL = toWritingURL.deletingLastPathComponent()
-          if !FileManager.default.fileExists(atPath: toDirURL.path) {
-            try FileManager.default.createDirectory(
-              at: toDirURL,
-              withIntermediateDirectories: true,
-              attributes: nil
+          let value: Any? = try await PerPathMutationLane.shared.withLanes(
+            for: fromURL,
+            and: toURL
+          ) {
+            try await self.copyCoordinated(
+              fromURL: fromURL,
+              toURL: toURL,
+              fromRelativePath: fromRelativePath,
+              toRelativePath: toRelativePath
             )
           }
-
-          // Remove destination file if it exists
-          if FileManager.default.fileExists(atPath: toWritingURL.path) {
-            try FileManager.default.removeItem(at: toWritingURL)
-          }
-
-          // Copy the file
-          try FileManager.default.copyItem(at: fromReadingURL, to: toWritingURL)
-          result(nil)
+          DispatchQueue.main.async { result(value) }
         } catch {
-          DebugHelper.log("copy error: \(error.localizedDescription)")
-          result(nativeCodeError(
+          let mapped = error as? FlutterError ?? self.nativeCodeError(
             error,
             operation: "copy",
             relativePath: toRelativePath
-          ))
+          )
+          DispatchQueue.main.async { result(mapped) }
         }
       }
+    }
+  }
 
-      if let copyCoordinationError {
-        DebugHelper.log("copy coordination error: \(copyCoordinationError.localizedDescription)")
-        result(nativeCodeError(
-          copyCoordinationError,
-          operation: "copy",
-          relativePath: toRelativePath
-        ))
+  /// Coordinated copy honoring the coordinator closure URLs. Surfaces
+  /// source-read coordination errors distinctly from destination write
+  /// errors (coordErr ?? ioErr). Throws a typed `FlutterError` on
+  /// failure; leaves no partial destination on mid-stage failure
+  /// (VAL-MUT-054).
+  private func copyCoordinated(
+    fromURL: URL,
+    toURL: URL,
+    fromRelativePath: String,
+    toRelativePath: String
+  ) async throws -> Any? {
+    guard FileManager.default.fileExists(atPath: fromURL.path) else {
+      throw itemNotFoundError(operation: "copy", relativePath: fromRelativePath)
+    }
+
+    let fileCoordinator = NSFileCoordinator(filePresenter: nil)
+    var handledExistingDestination = false
+    var overwriteError: Error?
+    var sourceCoordinationError: NSError?
+
+    fileCoordinator.coordinate(
+      readingItemAt: fromURL,
+      options: .withoutChanges,
+      error: &sourceCoordinationError
+    ) { fromReadingURL in
+      do {
+        handledExistingDestination = try copyOverwritingExistingItem(
+          from: fromReadingURL,
+          to: toURL
+        )
+      } catch {
+        overwriteError = error
       }
     }
+
+    if let sourceCoordinationError {
+      DebugHelper.log("copy source coordination error: \(sourceCoordinationError.localizedDescription)")
+      throw nativeCodeError(
+        sourceCoordinationError,
+        operation: "copy",
+        relativePath: fromRelativePath
+      )
+    }
+
+    if let overwriteError {
+      DebugHelper.log("copy error: \(overwriteError.localizedDescription)")
+      throw nativeCodeError(
+        overwriteError,
+        operation: "copy",
+        relativePath: toRelativePath
+      )
+    }
+
+    if handledExistingDestination {
+      return nil
+    }
+
+    // Use reading coordination for source and writing coordination for
+    // destination.
+    var copyCoordinationError: NSError?
+    var copyIOError: Error?
+
+    fileCoordinator.coordinate(
+      readingItemAt: fromURL,
+      options: .withoutChanges,
+      writingItemAt: toURL,
+      options: .forReplacing,
+      error: &copyCoordinationError
+    ) { fromReadingURL, toWritingURL in
+      do {
+        // Create destination directory if needed.
+        let toDirURL = toWritingURL.deletingLastPathComponent()
+        if !FileManager.default.fileExists(atPath: toDirURL.path) {
+          try FileManager.default.createDirectory(
+            at: toDirURL,
+            withIntermediateDirectories: true,
+            attributes: nil
+          )
+        }
+
+        // Remove destination file if it exists.
+        if FileManager.default.fileExists(atPath: toWritingURL.path) {
+          try FileManager.default.removeItem(at: toWritingURL)
+        }
+
+        // Copy the file.
+        try FileManager.default.copyItem(at: fromReadingURL, to: toWritingURL)
+      } catch {
+        copyIOError = error
+      }
+    }
+
+    if let copyCoordinationError {
+      DebugHelper.log("copy coordination error: \(copyCoordinationError.localizedDescription)")
+      throw nativeCodeError(
+        copyCoordinationError,
+        operation: "copy",
+        relativePath: toRelativePath
+      )
+    }
+    if let copyIOError {
+      DebugHelper.log("copy error: \(copyIOError.localizedDescription)")
+      throw nativeCodeError(
+        copyIOError,
+        operation: "copy",
+        relativePath: toRelativePath
+      )
+    }
+    return nil
   }
 
   private func copyOverwritingExistingItem(

@@ -81,17 +81,13 @@ class ICloudDocument: NSDocument {
             return
         }
 
-        let targetURL = fileURL
-        Task { [weak self] in
-            do {
-                try await resolveUnresolvedConflicts(at: targetURL)
-            } catch {
-                DebugHelper.log(
-                    "Failed to resolve conflicts: \(error.localizedDescription)"
-                )
-                self?.lastError = error
-            }
-        }
+        // Conflict policy is app-owned. The plugin only surfaces the
+        // conflict; it never auto-resolves-and-deletes losing
+        // `NSFileVersion`s. The app enumerates, copies out, and marks
+        // resolved via the dedicated version-exposure primitives.
+        DebugHelper.log(
+            "Document in conflict: \(fileURL.lastPathComponent)"
+        )
     }
 
     override func presentedItemDidMove(to newURL: URL) {

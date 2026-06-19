@@ -3,6 +3,7 @@ import 'dart:typed_data';
 import 'package:icloud_storage_plus/icloud_storage_method_channel.dart';
 import 'package:icloud_storage_plus/models/container_item.dart';
 import 'package:icloud_storage_plus/models/gather_result.dart';
+import 'package:icloud_storage_plus/models/icloud_version.dart';
 import 'package:icloud_storage_plus/models/transfer_progress.dart';
 import 'package:plugin_platform_interface/plugin_platform_interface.dart';
 
@@ -365,5 +366,51 @@ abstract class ICloudStoragePlatform extends PlatformInterface {
     String? relativePath,
   }) async {
     throw UnimplementedError('listContents() has not been implemented.');
+  }
+
+  /// Enumerate unresolved `NSFileVersion` conflict versions for an item.
+  ///
+  /// Returns a list of [ICloudVersion] descriptors (identifier +
+  /// modificationDate). An item with no unresolved versions returns an
+  /// empty list — never an error. The plugin only exposes versions; the
+  /// app owns conflict policy.
+  Future<List<ICloudVersion>> enumerateUnresolvedConflictVersions({
+    required String containerId,
+    required String relativePath,
+  }) async {
+    throw UnimplementedError(
+      'enumerateUnresolvedConflictVersions() has not been implemented.',
+    );
+  }
+
+  /// Copy a specific losing conflict version's bytes to a caller-provided
+  /// local destination, leaving the live iCloud file untouched.
+  ///
+  /// [versionIdentifier] is the opaque identifier from
+  /// [enumerateUnresolvedConflictVersions]. [destinationPath] is the
+  /// absolute local path to write the version's bytes to.
+  Future<void> copyConflictVersion({
+    required String containerId,
+    required String relativePath,
+    required String versionIdentifier,
+    required String destinationPath,
+  }) async {
+    throw UnimplementedError(
+      'copyConflictVersion() has not been implemented.',
+    );
+  }
+
+  /// Mark unresolved conflict versions resolved. When [removeOtherVersions]
+  /// is true, losing versions are removed after being marked resolved.
+  /// Invoked only on explicit app request; idempotent and a no-op when
+  /// nothing is unresolved.
+  Future<void> markConflictResolved({
+    required String containerId,
+    required String relativePath,
+    bool removeOtherVersions = false,
+  }) async {
+    throw UnimplementedError(
+      'markConflictResolved() has not been implemented.',
+    );
   }
 }

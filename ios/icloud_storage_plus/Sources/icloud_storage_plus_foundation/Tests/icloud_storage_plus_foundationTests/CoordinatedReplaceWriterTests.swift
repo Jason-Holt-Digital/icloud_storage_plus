@@ -9,16 +9,11 @@ import XCTest
 private final class LockedCallbacks: @unchecked Sendable {
     private let lock = NSLock()
     private var _verifyDestinationCount = 0
-    private var _resolveConflictsCount = 0
     private var _replaceItemCount = 0
 
     var verifyDestinationCount: Int {
         lock.lock(); defer { lock.unlock() }
         return _verifyDestinationCount
-    }
-    var resolveConflictsCount: Int {
-        lock.lock(); defer { lock.unlock() }
-        return _resolveConflictsCount
     }
     var replaceItemCount: Int {
         lock.lock(); defer { lock.unlock() }
@@ -28,10 +23,6 @@ private final class LockedCallbacks: @unchecked Sendable {
     func bumpVerify() {
         lock.lock(); defer { lock.unlock() }
         _verifyDestinationCount += 1
-    }
-    func bumpResolve() {
-        lock.lock(); defer { lock.unlock() }
-        _resolveConflictsCount += 1
     }
     func bumpReplace() {
         lock.lock(); defer { lock.unlock() }
@@ -86,6 +77,26 @@ final class CoordinatedReplaceWriterTests: XCTestCase {
         )
 
         XCTAssertFalse(helperSource.contains("copyItemOverwritingExistingItem"))
+    }
+
+    /// VAL-MUT-014: the coordinated replace path performs the LOCAL
+    /// REPLACE ONLY and references no version-removal primitive.
+    func testHelperSourceDoesNotRemoveOtherVersions() throws {
+        let helperSource = try String(
+            contentsOfFile: #filePath
+                .replacingOccurrences(
+                    of: "/Tests/icloud_storage_plus_foundationTests/"
+                        + "CoordinatedReplaceWriterTests.swift",
+                    with: "/CoordinatedReplaceWriter.swift"
+                ),
+            encoding: .utf8
+        )
+
+        XCTAssertFalse(
+            helperSource.contains("removeOtherVersionsOfItem"),
+            "CoordinatedReplaceWriter must not delete NSFileVersions; "
+                + "conflict policy is app-owned."
+        )
     }
 
     func testIOSCopyPropagatesSourceReadCoordinationErrors() throws {
@@ -168,7 +179,9 @@ final class CoordinatedReplaceWriterTests: XCTestCase {
         }
     }
 
-    func testOverwriteExistingItemThrowsWhenDestinationHasUnresolvedConflicts() async {
+    /// VAL-MUT-006: a verifyDestination failure against an existing file
+    /// throws a typed error and never reaches staging/replace.
+    func testOverwriteExistingItemThrowsWhenVerifyDestinationFails() async {
         let destinationURL = URL(fileURLWithPath: "/tmp/file.json")
         var preparedReplacement = false
 
@@ -177,10 +190,10 @@ final class CoordinatedReplaceWriterTests: XCTestCase {
             verifyDestination: { _ in
                 throw NSError(
                     domain: "ICloudStoragePlusErrorDomain",
-                    code: 1,
+                    code: 4,
                     userInfo: [
                         NSLocalizedDescriptionKey:
-                            "Cannot replace an iCloud item with unresolved conflict versions.",
+                            "Cannot replace an existing directory with file content.",
                     ]
                 )
             },
@@ -190,9 +203,6 @@ final class CoordinatedReplaceWriterTests: XCTestCase {
             },
             coordinateReplace: { _, _ in
                 XCTFail("should not coordinate replace")
-            },
-            resolveConflicts: { _ in
-                XCTFail("should not resolve conflicts")
             },
             replaceItem: { _, _ in
                 XCTFail("should not replace item")
@@ -204,11 +214,11 @@ final class CoordinatedReplaceWriterTests: XCTestCase {
             _ = try await writer.overwriteExistingItem(at: destinationURL) { _ in
                 preparedReplacement = true
             }
-            XCTFail("expected conflict error")
+            XCTFail("expected verifyDestination failure to bubble")
         } catch {
             XCTAssertEqual(
                 error.localizedDescription,
-                "Cannot replace an iCloud item with unresolved conflict versions."
+                "Cannot replace an existing directory with file content."
             )
         }
 
@@ -230,9 +240,6 @@ final class CoordinatedReplaceWriterTests: XCTestCase {
             },
             coordinateReplace: { _, _ in
                 XCTFail("should not coordinate replace")
-            },
-            resolveConflicts: { _ in
-                XCTFail("should not resolve conflicts")
             },
             replaceItem: { _, _ in
                 XCTFail("should not replace item")
@@ -262,7 +269,6 @@ final class CoordinatedReplaceWriterTests: XCTestCase {
             verifyDestination: { _ in },
             createReplacementDirectory: { _ in replacementDirectory },
             coordinateReplace: { url, accessor in try accessor(url) },
-            resolveConflicts: { _ in },
             replaceItem: { _, _ in throw expectedError },
             removeItem: { cleanedURL = $0 }
         )
@@ -292,7 +298,6 @@ final class CoordinatedReplaceWriterTests: XCTestCase {
         coordinateReplace: @escaping CoordinatedReplaceWriter.CoordinateReplace = {
             url, accessor in try accessor(url)
         },
-        resolveConflicts: @escaping CoordinatedReplaceWriter.ResolveConflicts = { _ in },
         replaceItem: @escaping CoordinatedReplaceWriter.ReplaceItem = { _, _ in },
         createReplacementDirectory: @escaping CoordinatedReplaceWriter.CreateReplacementDirectory
             = { _ in URL(fileURLWithPath: "/tmp/replacement") },
@@ -303,7 +308,6 @@ final class CoordinatedReplaceWriterTests: XCTestCase {
             verifyDestination: verifyDestination,
             createReplacementDirectory: createReplacementDirectory,
             coordinateReplace: coordinateReplace,
-            resolveConflicts: resolveConflicts,
             replaceItem: replaceItem,
             removeItem: removeItem
         )
@@ -317,7 +321,6 @@ final class CoordinatedReplaceWriterTests: XCTestCase {
             verifyDestination: { _ in callbacks.bumpVerify() },
             createReplacementDirectory: { _ in URL(fileURLWithPath: "/tmp/r") },
             coordinateReplace: { url, accessor in try accessor(url) },
-            resolveConflicts: { _ in callbacks.bumpResolve() },
             replaceItem: { _, _ in callbacks.bumpReplace() },
             removeItem: { _ in }
         )
@@ -328,11 +331,13 @@ final class CoordinatedReplaceWriterTests: XCTestCase {
 
         XCTAssertTrue(handled)
         XCTAssertEqual(
-            callbacks.resolveConflictsCount, 1,
-            "resolveConflicts must run exactly once"
+            callbacks.replaceItemCount, 1,
+            "replaceItem must run exactly once"
         )
     }
 
+    /// VAL-MUT-016: step order is now
+    /// `verifyDestination → coordinateReplace → replaceItem` (no resolve step).
     func testVerifyDestinationRunsBeforeCoordinateReplace() async throws {
         let log = LockedCallLog()
 
@@ -344,7 +349,6 @@ final class CoordinatedReplaceWriterTests: XCTestCase {
                 log.append("coordinateReplace")
                 try accessor(url)
             },
-            resolveConflicts: { _ in log.append("resolveConflicts") },
             replaceItem: { _, _ in log.append("replaceItem") },
             removeItem: { _ in }
         )
@@ -358,67 +362,142 @@ final class CoordinatedReplaceWriterTests: XCTestCase {
             [
                 "verifyDestination",
                 "coordinateReplace",
-                "resolveConflicts",
                 "replaceItem",
             ],
-            "step order must match spec: pre-flight → coord → resolve → replace"
+            "step order must match spec: pre-flight → coord → replace "
+                + "(no resolve step)"
         )
     }
 
-    func testResolveConflictsFailureBubblesAndBlocksReplace() async {
-        let failure = NSError(
-            domain: "ICloudStoragePlusErrorDomain",
-            code: 1,
-            userInfo: [
-                NSLocalizedDescriptionKey:
-                    "Cannot replace an iCloud item: auto-resolution failed — disk full",
-            ]
-        )
-        var replaceItemInvoked = false
+    /// VAL-MUT-001: replaceItem targets the coordinator-yielded URL.
+    func testReplaceItemUsesCoordinatedURL() async throws {
+        let destinationURL = URL(fileURLWithPath: "/tmp/file.json")
+        let coordinatedURL = URL(fileURLWithPath: "/tmp/coordinated-file.json")
+        var capturedReplaceDestination: URL?
 
         let writer = makeWriter(
             verifyDestination: { _ in },
-            resolveConflicts: { _ in throw failure },
-            replaceItem: { _, _ in replaceItemInvoked = true }
+            coordinateReplace: { _, accessor in try accessor(coordinatedURL) },
+            replaceItem: { target, _ in capturedReplaceDestination = target }
+        )
+
+        _ = try await writer.overwriteExistingItem(
+            at: destinationURL
+        ) { _ in }
+
+        XCTAssertEqual(
+            capturedReplaceDestination, coordinatedURL,
+            "replaceItem must run against the closure-provided URL, not the input URL."
+        )
+    }
+
+    /// VAL-MUT-005 case A: a coordinator failure yields a coordination-domain
+    /// error and never attempts the inner replace.
+    func testCoordinatorFailureSurfacesAsCoordinationError() async {
+        let coordinationError = NSError(
+            domain: NSCocoaErrorDomain,
+            code: NSFileWriteUnknownError
+        )
+        var replaceInvoked = false
+
+        let writer = makeWriter(
+            verifyDestination: { _ in },
+            coordinateReplace: { _, _ in throw coordinationError },
+            replaceItem: { _, _ in replaceInvoked = true }
         )
 
         do {
             _ = try await writer.overwriteExistingItem(
                 at: URL(fileURLWithPath: "/tmp/file.json")
             ) { _ in }
-            XCTFail("expected resolveConflicts failure to bubble")
+            XCTFail("expected coordination error")
         } catch {
-            let nsError = error as NSError
-            XCTAssertEqual(nsError.domain, "ICloudStoragePlusErrorDomain")
-            XCTAssertEqual(nsError.code, 1)
-            XCTAssertTrue(
-                nsError.localizedDescription.contains(
-                    CoordinatedReplaceWriter.autoResolveFailedDescriptionMarker
-                ),
-                "localized description must distinguish auto-resolve from "
-                    + "the old pre-flight refusal."
-            )
+            XCTAssertEqual((error as NSError), coordinationError)
         }
-        XCTAssertFalse(replaceItemInvoked)
+
+        XCTAssertFalse(replaceInvoked)
     }
 
-    func testResolveConflictsIsNoOpWhenNoConflictsExist() async throws {
-        var resolveConflictsCount = 0
-        var replaceItemCount = 0
+    /// VAL-MUT-005 case B: a successful coordinator + throwing replaceItem
+    /// yields the inner IO error preserved.
+    func testInnerReplaceFailureSurfacesAsIOError() async {
+        let ioError = NSError(domain: NSCocoaErrorDomain, code: 512)
 
         let writer = makeWriter(
             verifyDestination: { _ in },
-            resolveConflicts: { _ in resolveConflictsCount += 1 },
-            replaceItem: { _, _ in replaceItemCount += 1 }
+            coordinateReplace: { url, accessor in try accessor(url) },
+            replaceItem: { _, _ in throw ioError }
         )
 
-        let handled = try await writer.overwriteExistingItem(
-            at: URL(fileURLWithPath: "/tmp/file.json")
-        ) { _ in }
+        do {
+            _ = try await writer.overwriteExistingItem(
+                at: URL(fileURLWithPath: "/tmp/file.json")
+            ) { _ in }
+            XCTFail("expected IO error")
+        } catch {
+            XCTAssertEqual((error as NSError), ioError)
+        }
+    }
 
-        XCTAssertTrue(handled)
-        XCTAssertEqual(resolveConflictsCount, 1)
-        XCTAssertEqual(replaceItemCount, 1)
+    /// VAL-MUT-040: a mid-stage replace failure leaves the destination
+    /// intact and cleans the staged temp directory.
+    func testAtomicReplaceLeavesDestinationIntactAndCleansTempOnFailure() async throws {
+        let temporaryDirectory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: temporaryDirectory) }
+
+        let destinationURL = temporaryDirectory.appendingPathComponent("file.json")
+        try Data("original".utf8).write(to: destinationURL)
+
+        let writer = CoordinatedReplaceWriter(
+            fileExists: { _ in true },
+            verifyDestination: { _ in },
+            createReplacementDirectory: { _ in
+                try FileManager.default.url(
+                    for: .itemReplacementDirectory,
+                    in: .userDomainMask,
+                    appropriateFor: destinationURL,
+                    create: true
+                )
+            },
+            coordinateReplace: { url, accessor in try accessor(url) },
+            replaceItem: { _, _ in
+                throw NSError(domain: NSCocoaErrorDomain, code: 512)
+            },
+            removeItem: { url in
+                if FileManager.default.fileExists(atPath: url.path) {
+                    try FileManager.default.removeItem(at: url)
+                }
+            }
+        )
+
+        do {
+            _ = try await writer.overwriteExistingItem(
+                at: destinationURL
+            ) { replacementURL in
+                try Data("new".utf8).write(to: replacementURL)
+            }
+            XCTFail("expected replace failure")
+        } catch {
+            // expected
+        }
+
+        XCTAssertEqual(
+            try String(contentsOf: destinationURL), "original",
+            "destination must be unchanged after a mid-stage failure"
+        )
+
+        let tempRoot = FileManager.default.temporaryDirectory.path
+        let tempContents = (try? FileManager.default.contentsOfDirectory(
+            atPath: tempRoot
+        )) ?? []
+        let leftoverTemps = tempContents.filter {
+            $0.contains("itemReplacementDirectory")
+                || $0.contains("( iCloud Documents )")
+        }
+        XCTAssertTrue(
+            leftoverTemps.isEmpty,
+            "no staged itemReplacementDirectory temp should leak: \(leftoverTemps)"
+        )
     }
 
     func testVerifyOverwriteDestinationIsFileRejectsDirectory() throws {
@@ -454,51 +533,6 @@ final class CoordinatedReplaceWriterTests: XCTestCase {
         // refusal logic.
         try CoordinatedReplaceWriter
             .verifyOverwriteDestinationIsFile(at: fileURL)
-    }
-
-    func testLiveAutoResolveConflictErrorPreservesCoordinationDomain() {
-        let underlying = NSError(
-            domain: NSCocoaErrorDomain,
-            code: NSFileWriteOutOfSpaceError,
-            userInfo: [NSLocalizedDescriptionKey: "no disk space"]
-        )
-
-        let wrapped = CoordinatedReplaceWriter.autoResolveConflictError(
-            underlying: underlying
-        )
-
-        XCTAssertEqual(
-            wrapped.domain,
-            CoordinatedReplaceWriter.replaceStateErrorDomain,
-            "wrapping must keep the domain Dart consumers map to ICloudConflictException."
-        )
-        XCTAssertEqual(
-            wrapped.code,
-            CoordinatedReplaceWriter.conflictReplaceStateCode
-        )
-        XCTAssertTrue(
-            wrapped.localizedDescription.contains(
-                CoordinatedReplaceWriter.autoResolveFailedDescriptionMarker
-            )
-        )
-        // Slice D: explicit `as NSError` cast guarantees the value
-        // round-trips as NSError for downstream consumers (Dart-side
-        // `details["underlying"]`, Sentry breadcrumbs, os_log).
-        XCTAssertTrue(
-            wrapped.userInfo[NSUnderlyingErrorKey] is NSError,
-            "NSUnderlyingErrorKey value must be an NSError, not a "
-                + "Swift Error wrapper, so userInfo bridges cleanly."
-        )
-        XCTAssertEqual(
-            (wrapped.userInfo[NSUnderlyingErrorKey] as? NSError)?.code,
-            NSFileWriteOutOfSpaceError,
-            "Underlying NSError code must be reachable via userInfo "
-                + "lookup without re-bridging."
-        )
-        XCTAssertEqual(
-            wrapped.userInfo[NSUnderlyingErrorKey] as? NSError,
-            underlying
-        )
     }
 
     func testCoordinationErrorPreservesUnderlyingNativeSignature() {

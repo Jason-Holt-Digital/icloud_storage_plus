@@ -15,11 +15,6 @@ struct CoordinatedReplaceWriter {
         URL,
         @escaping @Sendable (URL) throws -> Void
     ) async throws -> Void
-    /// Sync because the live binding wraps three synchronous
-    /// `NSFileVersion` calls. The previous `async throws` decoration
-    /// added no real suspension and forced a deadlock-prone
-    /// `DispatchSemaphore` bridge inside the coordinator block.
-    typealias ResolveConflicts = (URL) throws -> Void
     typealias ReplaceItem = (URL, URL) throws -> Void
     typealias RemoveItem = (URL) throws -> Void
 
@@ -27,10 +22,15 @@ struct CoordinatedReplaceWriter {
     let verifyDestination: VerifyDestination
     let createReplacementDirectory: CreateReplacementDirectory
     let coordinateReplace: CoordinateReplace
-    let resolveConflicts: ResolveConflicts
     let replaceItem: ReplaceItem
     let removeItem: RemoveItem
 
+    /// Performs a coordinated LOCAL REPLACE ONLY of an existing file.
+    ///
+    /// Conflict policy is app-owned: this writer performs no conflict
+    /// resolution and deletes no `NSFileVersion`s. The app enumerates
+    /// unresolved versions, copies losing versions out, and marks
+    /// resolved via the dedicated `VersionExposure` primitives.
     func overwriteExistingItem(
         at destinationURL: URL,
         prepareReplacementFile: (URL) throws -> Void
@@ -47,17 +47,11 @@ struct CoordinatedReplaceWriter {
 
         do {
             try prepareReplacementFile(replacementURL)
-            let resolveConflicts = self.resolveConflicts
             let replaceItem = self.replaceItem
             try await coordinateReplace(destinationURL) {
                 [replacementURL] coordinatedURL in
-                try resolveConflicts(coordinatedURL)
-                // The resolver above calls `replaceItem(at:)` on the
-                // most-recent conflict version; the next line clobbers
-                // that content with the user's replacement. That's
-                // Apple's canonical pattern — accepting the micro-cost
-                // keeps one way to resolve conflicts across both the
-                // observer path and the write path.
+                // Local replace only — no resolve/version-removal step.
+                // The coordinated URL is honored per Apple's contract.
                 try replaceItem(coordinatedURL, replacementURL)
             }
         } catch {
@@ -72,10 +66,12 @@ struct CoordinatedReplaceWriter {
 
 extension CoordinatedReplaceWriter {
     static let replaceStateErrorDomain = "ICloudStoragePlusErrorDomain"
+    /// Repurposed for version-exposure failures (enumerate/copy-out/
+    /// mark-resolved) produced by `VersionExposure`. The auto-resolve
+    /// producer that previously emitted this code has been removed.
     static let conflictReplaceStateCode = 1
     static let directoryReplaceStateCode = 4
     static let coordinationReplaceStateCode = 5
-    static let autoResolveFailedDescriptionMarker = "auto-resolution failed"
 
     static func fileDestinationError(isDirectory: Bool) -> NSError? {
         guard isDirectory else {
@@ -88,27 +84,6 @@ extension CoordinatedReplaceWriter {
             userInfo: [
                 NSLocalizedDescriptionKey:
                     "Cannot replace an existing directory with file content.",
-            ]
-        )
-    }
-
-    /// Wraps an auto-resolution failure in an `ICloudStoragePlusErrorDomain`
-    /// conflict error so the Dart layer still maps it to
-    /// `ICloudConflictException` while signaling (via the localized
-    /// description) that the failure came from resolution, not pre-flight.
-    static func autoResolveConflictError(
-        underlying: Error
-    ) -> NSError {
-        let underlyingNSError = underlying as NSError
-        return NSError(
-            domain: replaceStateErrorDomain,
-            code: conflictReplaceStateCode,
-            userInfo: [
-                NSLocalizedDescriptionKey:
-                    "Cannot replace an iCloud item: "
-                    + "\(autoResolveFailedDescriptionMarker) — "
-                    + underlyingNSError.localizedDescription,
-                NSUnderlyingErrorKey: underlyingNSError,
             ]
         )
     }
@@ -202,13 +177,6 @@ extension CoordinatedReplaceWriter {
             )
         },
         coordinateReplace: liveCoordinateReplace,
-        resolveConflicts: { url in
-            do {
-                try resolveUnresolvedConflictsSync(at: url)
-            } catch {
-                throw autoResolveConflictError(underlying: error)
-            }
-        },
         replaceItem: { destinationURL, replacementURL in
             _ = try FileManager.default.replaceItemAt(
                 destinationURL,

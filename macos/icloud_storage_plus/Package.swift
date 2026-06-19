@@ -29,9 +29,11 @@ let package = Package(
                 "icloud_storage_plus_foundation/CoordinatedReplaceWriter.swift",
                 "icloud_storage_plus_foundation/MetadataQuerySupport.swift",
                 "icloud_storage_plus_foundation/MetadataQuerySession.swift",
-                "icloud_storage_plus_foundation/ConflictResolver.swift",
                 "icloud_storage_plus_foundation/WriteEntrypointPreflight.swift",
                 "icloud_storage_plus_foundation/UbiquityContainerResolver.swift",
+                "icloud_storage_plus_foundation/VersionExposure.swift",
+                "icloud_storage_plus_foundation/PerPathMutationLane.swift",
+                "icloud_storage_plus_foundation/UbiquitousItemMaterializer.swift",
             ],
             resources: [
                 // If this plugin requires a privacy manifest (e.g. uses required
