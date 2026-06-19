@@ -23,6 +23,40 @@ private final class LockedEventLog: @unchecked Sendable {
     }
 }
 
+/// `NSLock`-guarded tracker for concurrent in-flight coordinated-body
+/// executions, used by the cooperative-pool stress test to assert that
+/// cross-path ops overlap and that no op starves.
+private final class OverlapTracker: @unchecked Sendable {
+    private let lock = NSLock()
+    private var inFlight = 0
+    private var maxConcurrent = 0
+    private var completed = 0
+
+    var maxConcurrentValue: Int {
+        lock.lock(); defer { lock.unlock() }
+        return maxConcurrent
+    }
+
+    var completedValue: Int {
+        lock.lock(); defer { lock.unlock() }
+        return completed
+    }
+
+    func enter() {
+        lock.lock()
+        inFlight += 1
+        if inFlight > maxConcurrent { maxConcurrent = inFlight }
+        lock.unlock()
+    }
+
+    func exit() {
+        lock.lock()
+        inFlight -= 1
+        completed += 1
+        lock.unlock()
+    }
+}
+
 final class PerPathMutationLaneTests: XCTestCase {
     private func makeLane() -> PerPathMutationLane {
         PerPathMutationLane()
@@ -398,5 +432,120 @@ final class PerPathMutationLaneTests: XCTestCase {
         }
         _ = try await interactive
         _ = await bulkTask.value
+    }
+
+    /// Cooperative-pool / libdispatch-worker stress test
+    /// (VAL-MUT-052): fans out WELL BEYOND core-count concurrent
+    /// distinct-path delete/move ops with a REAL (non-instant)
+    /// coordinated body and asserts:
+    ///   - no starvation: every op completes,
+    ///   - cross-path overlap: at least two distinct ops are in their
+    ///     coordinated accessor concurrently,
+    ///   - genuine concurrency: total elapsed is well under the serial
+    ///     sum (ops run in parallel, not serially).
+    ///
+    /// The existing suite uses fast injected closures and never
+    /// exercises cooperative-pool/worker saturation. This test drives
+    /// the real `CoordinatedIO` hop (blocking `NSFileCoordinator`
+    /// coordinate on a `DispatchQueue.global` worker, not on a
+    /// cooperative-pool thread) combined with the non-blocking async
+    /// lane, so a burst of distinct-path coordinated ops cannot starve
+    /// other Swift async work or exhaust the libdispatch worker pool.
+    func testStressBeyondCoreCountNoStarvationAndCrossPathOverlap() async throws {
+        let cores = ProcessInfo.processInfo.processorCount
+        // Well beyond core-count.
+        let count = max(cores * 4, 32)
+        let lane = PerPathMutationLane()
+        let tracker = OverlapTracker()
+
+        let tmpRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent(
+                "lane-stress-\(UUID().uuidString)",
+                isDirectory: true
+            )
+        try FileManager.default.createDirectory(
+            at: tmpRoot,
+            withIntermediateDirectories: true
+        )
+        defer { try? FileManager.default.removeItem(at: tmpRoot) }
+
+        var urls: [URL] = []
+        for index in 0..<count {
+            let url = tmpRoot.appendingPathComponent("file-\(index).json")
+            try "seed-\(index)".write(
+                to: url, atomically: true, encoding: .utf8
+            )
+            urls.append(url)
+        }
+
+        // Each coordinated body is non-instant (~20ms inside the
+        // accessor). The serial sum is the time if every op ran one at
+        // a time; genuine cross-path concurrency must beat it by a wide
+        // margin.
+        let perBodySeconds: Double = 0.02
+        let serialSum = Double(count) * perBodySeconds
+
+        let start = Date()
+        await withTaskGroup(of: Void.self) { group in
+            for index in 0..<count {
+                let url = urls[index]
+                if index.isMultiple(of: 2) {
+                    // "delete" verb: single-lane coordinated write.
+                    group.addTask {
+                        _ = try? await lane.withLane(for: url) {
+                            try await CoordinatedIO.coordinateWriting(
+                                at: url,
+                                options: .forReplacing
+                            ) { coordinatedURL in
+                                tracker.enter()
+                                Thread.sleep(forTimeInterval: perBodySeconds)
+                                try "updated-\(index)".write(
+                                    to: coordinatedURL,
+                                    atomically: true,
+                                    encoding: .utf8
+                                )
+                                tracker.exit()
+                            }
+                        }
+                    }
+                } else {
+                    // "move" verb: cross-path (two-lane) coordinated
+                    // write against a distinct second endpoint.
+                    let other = urls[(index + 1) % count]
+                    group.addTask {
+                        _ = try? await lane.withLanes(for: url, and: other) {
+                            try await CoordinatedIO.coordinateWritingTwo(
+                                writingAt: url, options: .forMoving,
+                                writingAt: other, options: .forReplacing
+                            ) { _, _ in
+                                tracker.enter()
+                                Thread.sleep(forTimeInterval: perBodySeconds)
+                                tracker.exit()
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        let elapsed = Date().timeIntervalSince(start)
+
+        // No starvation: every op completed.
+        XCTAssertEqual(
+            tracker.completedValue, count,
+            "all \(count) ops must complete (no starvation)"
+        )
+        // Cross-path overlap: at least two ops were in their coordinated
+        // accessor concurrently.
+        XCTAssertGreaterThanOrEqual(
+            tracker.maxConcurrentValue, 2,
+            "cross-path ops must overlap (maxConcurrent="
+                + "\(tracker.maxConcurrentValue))"
+        )
+        // Genuine concurrency: elapsed well under the serial sum.
+        XCTAssertLessThan(
+            elapsed, serialSum,
+            "ops must run concurrently (elapsed=\(elapsed)s, "
+                + "serialSum=\(serialSum)s)"
+        )
     }
 }

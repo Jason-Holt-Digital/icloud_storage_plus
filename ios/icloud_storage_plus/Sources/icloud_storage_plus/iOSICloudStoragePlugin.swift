@@ -1492,7 +1492,11 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
 
   /// Coordinated delete honoring the coordinator closure URL. Throws a
   /// typed `FlutterError` on coordination or IO failure (coordErr ??
-  /// ioErr — never a silent null/false success).
+  /// ioErr — never a silent null/false success). The blocking
+  /// `NSFileCoordinator.coordinate(...)` is hopped onto a
+  /// `DispatchQueue.global` worker via `CoordinatedIO` so it never
+  /// blocks the Swift cooperative pool (same pattern as
+  /// `CoordinatedReplaceWriter.liveCoordinateReplace`).
   private func deleteCoordinated(
     fileURL: URL,
     relativePath: String
@@ -1501,39 +1505,32 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
       throw itemNotFoundError(operation: "delete", relativePath: relativePath)
     }
 
-    let coordinator = NSFileCoordinator(filePresenter: nil)
-    var coordinationError: NSError?
-    var ioError: Error?
-
-    coordinator.coordinate(
-      writingItemAt: fileURL,
-      options: NSFileCoordinator.WritingOptions.forDeleting,
-      error: &coordinationError
-    ) { writingURL in
-      do {
+    do {
+      try await CoordinatedIO.coordinateWriting(
+        at: fileURL,
+        options: NSFileCoordinator.WritingOptions.forDeleting
+      ) { writingURL in
         try FileManager.default.removeItem(at: writingURL)
-      } catch {
-        ioError = error
       }
-    }
-
-    if let coordinationError {
-      throw nativeCodeError(
-        coordinationError,
-        operation: "delete",
-        relativePath: relativePath
-      )
-    }
-    if let ioError {
-      throw mapFileNotFoundError(
-        ioError,
-        operation: "delete",
-        relativePath: relativePath
-      ) ?? nativeCodeError(
-        ioError,
-        operation: "delete",
-        relativePath: relativePath
-      )
+    } catch let bridgeError as CoordinateBridgeError {
+      switch bridgeError {
+      case .coordination(let coordinationError):
+        throw nativeCodeError(
+          coordinationError,
+          operation: "delete",
+          relativePath: relativePath
+        )
+      case .accessor(let ioError):
+        throw mapFileNotFoundError(
+          ioError,
+          operation: "delete",
+          relativePath: relativePath
+        ) ?? nativeCodeError(
+          ioError,
+          operation: "delete",
+          relativePath: relativePath
+        )
+      }
     }
     return nil
   }
@@ -1589,7 +1586,10 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
   /// Coordinated move honoring both coordinator closure URLs. Creates
   /// the destination parent directory as needed. Throws a typed
   /// `FlutterError` on coordination or IO failure; preserves the source
-  /// on mid-stage failure (VAL-MUT-054).
+  /// on mid-stage failure (VAL-MUT-054). The blocking
+  /// `NSFileCoordinator.coordinate(...)` is hopped onto a
+  /// `DispatchQueue.global` worker via `CoordinatedIO` so it never
+  /// blocks the Swift cooperative pool.
   private func moveCoordinated(
     atURL: URL,
     toURL: URL,
@@ -1599,18 +1599,13 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
       throw itemNotFoundError(operation: "move", relativePath: atRelativePath)
     }
 
-    let coordinator = NSFileCoordinator(filePresenter: nil)
-    var coordinationError: NSError?
-    var ioError: Error?
-
-    coordinator.coordinate(
-      writingItemAt: atURL,
-      options: NSFileCoordinator.WritingOptions.forMoving,
-      writingItemAt: toURL,
-      options: NSFileCoordinator.WritingOptions.forReplacing,
-      error: &coordinationError
-    ) { atWritingURL, toWritingURL in
-      do {
+    do {
+      try await CoordinatedIO.coordinateWritingTwo(
+        writingAt: atURL,
+        options: NSFileCoordinator.WritingOptions.forMoving,
+        writingAt: toURL,
+        options: NSFileCoordinator.WritingOptions.forReplacing
+      ) { atWritingURL, toWritingURL in
         let toDirURL = toWritingURL.deletingLastPathComponent()
         if !FileManager.default.fileExists(atPath: toDirURL.path) {
           try FileManager.default.createDirectory(
@@ -1620,24 +1615,22 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
           )
         }
         try FileManager.default.moveItem(at: atWritingURL, to: toWritingURL)
-      } catch {
-        ioError = error
       }
-    }
-
-    if let coordinationError {
-      throw nativeCodeError(
-        coordinationError,
-        operation: "move",
-        relativePath: atRelativePath
-      )
-    }
-    if let ioError {
-      throw nativeCodeError(
-        ioError,
-        operation: "move",
-        relativePath: atRelativePath
-      )
+    } catch let bridgeError as CoordinateBridgeError {
+      switch bridgeError {
+      case .coordination(let coordinationError):
+        throw nativeCodeError(
+          coordinationError,
+          operation: "move",
+          relativePath: atRelativePath
+        )
+      case .accessor(let ioError):
+        throw nativeCodeError(
+          ioError,
+          operation: "move",
+          relativePath: atRelativePath
+        )
+      }
     }
     return nil
   }
@@ -1695,7 +1688,9 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
   /// source-read coordination errors distinctly from destination write
   /// errors (coordErr ?? ioErr). Throws a typed `FlutterError` on
   /// failure; leaves no partial destination on mid-stage failure
-  /// (VAL-MUT-054).
+  /// (VAL-MUT-054). The blocking `NSFileCoordinator.coordinate(...)`
+  /// calls are hopped onto a `DispatchQueue.global` worker via
+  /// `CoordinatedIO` so they never block the Swift cooperative pool.
   private func copyCoordinated(
     fromURL: URL,
     toURL: URL,
@@ -1706,42 +1701,34 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
       throw itemNotFoundError(operation: "copy", relativePath: fromRelativePath)
     }
 
-    let fileCoordinator = NSFileCoordinator(filePresenter: nil)
-    var handledExistingDestination = false
-    var overwriteError: Error?
-    var sourceCoordinationError: NSError?
-
-    fileCoordinator.coordinate(
-      readingItemAt: fromURL,
-      options: .withoutChanges,
-      error: &sourceCoordinationError
-    ) { fromReadingURL in
-      do {
-        handledExistingDestination = try copyOverwritingExistingItem(
+    let handledExistingDestination: Bool
+    do {
+      handledExistingDestination = try await CoordinatedIO.coordinateReadingReturning(
+        at: fromURL,
+        options: .withoutChanges
+      ) { fromReadingURL in
+        try self.copyOverwritingExistingItem(
           from: fromReadingURL,
           to: toURL
         )
-      } catch {
-        overwriteError = error
       }
-    }
-
-    if let sourceCoordinationError {
-      DebugHelper.log("copy source coordination error: \(sourceCoordinationError.localizedDescription)")
-      throw nativeCodeError(
-        sourceCoordinationError,
-        operation: "copy",
-        relativePath: fromRelativePath
-      )
-    }
-
-    if let overwriteError {
-      DebugHelper.log("copy error: \(overwriteError.localizedDescription)")
-      throw nativeCodeError(
-        overwriteError,
-        operation: "copy",
-        relativePath: toRelativePath
-      )
+    } catch let bridgeError as CoordinateBridgeError {
+      switch bridgeError {
+      case .coordination(let sourceCoordinationError):
+        DebugHelper.log("copy source coordination error: \(sourceCoordinationError.localizedDescription)")
+        throw nativeCodeError(
+          sourceCoordinationError,
+          operation: "copy",
+          relativePath: fromRelativePath
+        )
+      case .accessor(let overwriteError):
+        DebugHelper.log("copy error: \(overwriteError.localizedDescription)")
+        throw nativeCodeError(
+          overwriteError,
+          operation: "copy",
+          relativePath: toRelativePath
+        )
+      }
     }
 
     if handledExistingDestination {
@@ -1750,17 +1737,13 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
 
     // Use reading coordination for source and writing coordination for
     // destination.
-    var copyCoordinationError: NSError?
-    var copyIOError: Error?
-
-    fileCoordinator.coordinate(
-      readingItemAt: fromURL,
-      options: .withoutChanges,
-      writingItemAt: toURL,
-      options: .forReplacing,
-      error: &copyCoordinationError
-    ) { fromReadingURL, toWritingURL in
-      do {
+    do {
+      try await CoordinatedIO.coordinateReadingAndWriting(
+        readingAt: fromURL,
+        readingOptions: .withoutChanges,
+        writingAt: toURL,
+        writingOptions: .forReplacing
+      ) { fromReadingURL, toWritingURL in
         // Create destination directory if needed.
         let toDirURL = toWritingURL.deletingLastPathComponent()
         if !FileManager.default.fileExists(atPath: toDirURL.path) {
@@ -1778,26 +1761,24 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
 
         // Copy the file.
         try FileManager.default.copyItem(at: fromReadingURL, to: toWritingURL)
-      } catch {
-        copyIOError = error
       }
-    }
-
-    if let copyCoordinationError {
-      DebugHelper.log("copy coordination error: \(copyCoordinationError.localizedDescription)")
-      throw nativeCodeError(
-        copyCoordinationError,
-        operation: "copy",
-        relativePath: toRelativePath
-      )
-    }
-    if let copyIOError {
-      DebugHelper.log("copy error: \(copyIOError.localizedDescription)")
-      throw nativeCodeError(
-        copyIOError,
-        operation: "copy",
-        relativePath: toRelativePath
-      )
+    } catch let bridgeError as CoordinateBridgeError {
+      switch bridgeError {
+      case .coordination(let copyCoordinationError):
+        DebugHelper.log("copy coordination error: \(copyCoordinationError.localizedDescription)")
+        throw nativeCodeError(
+          copyCoordinationError,
+          operation: "copy",
+          relativePath: toRelativePath
+        )
+      case .accessor(let copyIOError):
+        DebugHelper.log("copy error: \(copyIOError.localizedDescription)")
+        throw nativeCodeError(
+          copyIOError,
+          operation: "copy",
+          relativePath: toRelativePath
+        )
+      }
     }
     return nil
   }

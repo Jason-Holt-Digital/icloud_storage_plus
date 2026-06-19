@@ -17,6 +17,7 @@ container, with document coordination via UIDocument/NSDocument.
   s.source           = { :path => '.' }
   s.source_files     = [
     'icloud_storage_plus/Sources/icloud_storage_plus/**/*.{h,m,swift}',
+    'icloud_storage_plus/Sources/icloud_storage_plus_foundation/CoordinatedIO.swift',
     'icloud_storage_plus/Sources/icloud_storage_plus_foundation/CoordinatedReplaceWriter.swift',
     'icloud_storage_plus/Sources/icloud_storage_plus_foundation/MetadataQuerySupport.swift',
     'icloud_storage_plus/Sources/icloud_storage_plus_foundation/MetadataQuerySession.swift',

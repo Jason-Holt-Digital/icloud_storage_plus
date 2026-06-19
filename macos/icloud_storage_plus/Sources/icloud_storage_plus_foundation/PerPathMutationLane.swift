@@ -14,13 +14,37 @@ import Foundation
 /// the lane's serialized closure, never the reverse, so no deadlock is
 /// possible.
 ///
-/// Implementation: each normalized path owns a serial `DispatchQueue`.
-/// The calling async task suspends at a single-resume continuation
-/// while the lane's dispatch thread runs the (possibly async) body and
-/// signals completion via a `DispatchSemaphore`. The dispatch thread is
-/// NOT a Swift cooperative-pool thread, so blocking it cannot starve
-/// the cooperative pool — the same deadlock-free bridging pattern used
-/// by `CoordinatedReplaceWriter.liveCoordinateReplace`.
+/// Implementation: each normalized path owns a cooperative async mutex
+/// (a `withCheckedContinuation`-based binary semaphore with a FIFO
+/// waiter queue). The calling async task SUSPENDS cooperatively (it
+/// does NOT block any thread) while waiting for its lane turn, then
+/// runs the (possibly async) body on the Swift cooperative pool. No
+/// `DispatchSemaphore` is used to bridge the body, and no libdispatch
+/// worker thread is blocked for the body's full duration — so
+/// high-fan-out bulk mutations cannot exhaust the libdispatch worker
+/// pool, and a burst of concurrent distinct-path ops cannot starve
+/// other Swift async work.
+///
+/// The blocking `NSFileCoordinator.coordinate(...)` call itself is
+/// never run on a cooperative-pool thread: the coordinated
+/// delete/move/copy helpers hop it onto a `DispatchQueue.global`
+/// worker via a continuation (see `CoordinatedIO` and
+/// `CoordinatedReplaceWriter.liveCoordinateReplace`), so coordination
+/// blocks a libdispatch worker, not a cooperative-pool thread. With
+/// both the cooperative lane acquisition and the coordinated hop, there
+/// is no `DispatchSemaphore.wait()` held for a body's duration and no
+/// cooperative-pool starvation surface.
+///
+/// A counting-semaphore bound on in-flight lanes was considered and
+/// rejected: on a per-path serial-`DispatchQueue` design a global
+/// in-flight bound either fails to reduce blocked worker threads (the
+/// thread is claimed when the block is dispatched, before the bound is
+/// checked) or, if acquired before dispatch, lets a burst of same-path
+/// ops exhaust the bound and starve unrelated cross-path work
+/// (violating no-starvation). Eliminating the per-body thread blocking
+/// entirely (this async-mutex design) bounds thread usage by
+/// construction without breaking the per-path-serial /
+/// cross-path-concurrent / FIFO / no-starvation invariants.
 ///
 /// Idle lanes (no queued and no in-flight op) are reclaimed so the lane
 /// map does not grow unbounded over a long session.
@@ -28,7 +52,7 @@ final class PerPathMutationLane: @unchecked Sendable {
     static let shared = PerPathMutationLane()
 
     private let lock = NSLock()
-    private var lanes: [String: DispatchQueue] = [:]
+    private var lanes: [String: Lane] = [:]
     private var pending: [String: Int] = [:]
 
     /// Test/inspection hook: the number of lanes currently retained.
@@ -57,12 +81,17 @@ final class PerPathMutationLane: @unchecked Sendable {
         perform body: @escaping @Sendable () async throws -> T
     ) async throws -> T {
         let key = Self.normalizationKey(for: url)
-        let queue = acquireLane(key)
-        return try await withCheckedThrowingContinuation {
-            (cont: CheckedContinuation<T, Error>) in
-            queue.async {
-                self.runAsyncBody(body, on: key, resume: cont)
-            }
+        let lane = acquireLane(key)
+        await lane.mutex.acquire()
+        do {
+            let value = try await body()
+            releaseLane(key)
+            lane.mutex.release()
+            return value
+        } catch {
+            releaseLane(key)
+            lane.mutex.release()
+            throw error
         }
     }
 
@@ -83,45 +112,46 @@ final class PerPathMutationLane: @unchecked Sendable {
         }
 
         let (first, second) = keyA < keyB ? (keyA, keyB) : (keyB, keyA)
-        let queueFirst = acquireLane(first)
-
-        return try await withCheckedThrowingContinuation {
-            (cont: CheckedContinuation<T, Error>) in
-            queueFirst.async {
-                // Acquire the second lane and run the body on it. The
-                // first lane's thread blocks here until the body
-                // completes, so BOTH lanes are held for the body's full
-                // duration (cross-path serialization).
-                let queueSecond = self.acquireLane(second)
-                let firstDone = DispatchSemaphore(value: 0)
-                queueSecond.async {
-                    self.runAsyncBody(body, on: second, resume: cont) {
-                        firstDone.signal()
-                    }
-                }
-                firstDone.wait()
-                self.releaseLane(first)
-            }
+        let laneFirst = acquireLane(first)
+        await laneFirst.mutex.acquire()
+        let laneSecond = acquireLane(second)
+        await laneSecond.mutex.acquire()
+        do {
+            let value = try await body()
+            releaseLane(second)
+            laneSecond.mutex.release()
+            releaseLane(first)
+            laneFirst.mutex.release()
+            return value
+        } catch {
+            releaseLane(second)
+            laneSecond.mutex.release()
+            releaseLane(first)
+            laneFirst.mutex.release()
+            throw error
         }
     }
 
     // MARK: - Private
 
-    private func acquireLane(_ key: String) -> DispatchQueue {
+    private func acquireLane(_ key: String) -> Lane {
         lock.lock()
         defer { lock.unlock() }
         pending[key, default: 0] += 1
         if let existing = lanes[key] { return existing }
-        let queue = DispatchQueue(
-            label: "icloud_storage_plus.mutation_lane.\(key)"
-        )
-        lanes[key] = queue
-        return queue
+        let lane = Lane()
+        lanes[key] = lane
+        return lane
     }
 
+    /// Decrements the pending count for `key` and reclaims the lane
+    /// when no op is queued or in flight on it. The mutex itself is
+    /// released separately (by the caller) so its FIFO hand-off to the
+    /// next waiter is preserved; a lane is only reclaimed when pending
+    /// hits zero (no waiters), which is the only safe moment to drop
+    /// the mutex from the map.
     private func releaseLane(_ key: String) {
         lock.lock()
-        defer { lock.unlock() }
         let next = (pending[key] ?? 0) - 1
         if next <= 0 {
             pending.removeValue(forKey: key)
@@ -129,32 +159,56 @@ final class PerPathMutationLane: @unchecked Sendable {
         } else {
             pending[key] = next
         }
+        lock.unlock()
     }
 
-    /// Runs an async `body` while blocking the lane's dispatch thread
-    /// until completion (semaphore-bridged). The continuation is resumed
-    /// exactly once from the async body's Task; the dispatch thread only
-    /// performs lane bookkeeping after the body completes. `onRelease`
-    /// runs after the body completes (used to release the outer lane in
-    /// the cross-path case).
-    private func runAsyncBody<T: Sendable>(
-        _ body: @escaping @Sendable () async throws -> T,
-        on key: String,
-        resume cont: CheckedContinuation<T, Error>,
-        onRelease: () -> Void = {}
-    ) {
-        let semaphore = DispatchSemaphore(value: 0)
-        Task {
-            do {
-                let value = try await body()
-                cont.resume(returning: value)
-            } catch {
-                cont.resume(throwing: error)
+    /// Per-path lane state: a cooperative async mutex.
+    private final class Lane: @unchecked Sendable {
+        let mutex = AsyncMutex()
+    }
+}
+
+/// Cooperative binary mutex with FIFO waiter ordering. Acquisition
+/// SUSPENDS the calling async task (it does NOT block any thread);
+/// release hands off to the earliest waiter or marks the mutex
+/// available. Used by `PerPathMutationLane` to serialize per path
+/// without occupying a libdispatch worker for a body's duration.
+private final class AsyncMutex: @unchecked Sendable {
+    private let lock = NSLock()
+    private var available = true
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func acquire() async {
+        // The availability check and the waiter registration happen
+        // atomically under `lock`, inside the (synchronous) continuation
+        // closure, so no `release()` can sneak in between and lose the
+        // hand-off. Resuming immediately when available is safe: a
+        // concurrent `release()` cannot run while there is no holder
+        // (available == true means nothing is holding the mutex).
+        await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+            lock.lock()
+            if available {
+                available = false
+                lock.unlock()
+                cont.resume()
+            } else {
+                waiters.append(cont)
+                lock.unlock()
             }
-            semaphore.signal()
         }
-        semaphore.wait()
-        releaseLane(key)
-        onRelease()
+    }
+
+    func release() {
+        lock.lock()
+        if let next = waiters.first {
+            waiters.removeFirst()
+            lock.unlock()
+            // Hand-off: the resumed waiter becomes the holder; the
+            // mutex stays unavailable so a new acquirer queues behind.
+            next.resume()
+        } else {
+            available = true
+            lock.unlock()
+        }
     }
 }

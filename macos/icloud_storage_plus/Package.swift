@@ -26,6 +26,7 @@ let package = Package(
             ],
             sources: [
                 "icloud_storage_plus",
+                "icloud_storage_plus_foundation/CoordinatedIO.swift",
                 "icloud_storage_plus_foundation/CoordinatedReplaceWriter.swift",
                 "icloud_storage_plus_foundation/MetadataQuerySupport.swift",
                 "icloud_storage_plus_foundation/MetadataQuerySession.swift",
