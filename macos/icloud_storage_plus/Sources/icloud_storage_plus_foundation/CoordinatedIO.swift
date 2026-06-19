@@ -140,8 +140,8 @@ enum CoordinatedIO {
                 guard let result else {
                     continuation.resume(throwing: CoordinateBridgeError.accessor(
                         NSError(
-                            domain: CoordinatedReplaceWriter.replaceStateErrorDomain,
-                            code: CoordinatedReplaceWriter.coordinationReplaceStateCode,
+                            domain: Self.noValueErrorDomain,
+                            code: Self.noValueErrorCode,
                             userInfo: [
                                 NSLocalizedDescriptionKey:
                                     "Coordinated read accessor returned no value.",
@@ -191,6 +191,14 @@ enum CoordinatedIO {
             }
         }
     }
+
+    /// Error domain for the defensive fallback in
+    /// `coordinateReadingReturning` (accessor ran but returned no value).
+    /// Distinct from `CoordinatedReplaceWriter`'s domain so diagnostics
+    /// attribute it correctly to the read bridge, not the replace path.
+    private static let noValueErrorDomain = "icloud_storage_plus.CoordinatedIO"
+    /// Error code paired with `noValueErrorDomain`.
+    private static let noValueErrorCode = 1
 
     /// Resumes the Void continuation exactly once, prioritizing the
     /// coordination error (the accessor never ran) over the inner-IO

@@ -171,28 +171,55 @@ final class PerPathMutationLane: @unchecked Sendable {
 /// Cooperative binary mutex with FIFO waiter ordering. Acquisition
 /// SUSPENDS the calling async task (it does NOT block any thread);
 /// release hands off to the earliest waiter or marks the mutex
-/// available. Used by `PerPathMutationLane` to serialize per path
-/// without occupying a libdispatch worker for a body's duration.
+/// available. Cancelled tasks are removed from the waiter queue
+/// promptly so they do not delay subsequent waiters. Used by
+/// `PerPathMutationLane` to serialize per path without occupying a
+/// libdispatch worker for a body's duration.
 private final class AsyncMutex: @unchecked Sendable {
     private let lock = NSLock()
     private var available = true
-    private var waiters: [CheckedContinuation<Void, Never>] = []
+    private var waiters: [Waiter] = []
 
     func acquire() async {
-        // The availability check and the waiter registration happen
-        // atomically under `lock`, inside the (synchronous) continuation
-        // closure, so no `release()` can sneak in between and lose the
-        // hand-off. Resuming immediately when available is safe: a
-        // concurrent `release()` cannot run while there is no holder
-        // (available == true means nothing is holding the mutex).
-        await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+        // Each caller allocates its own Waiter so the cancellation
+        // handler can identify and remove exactly this entry by
+        // object identity. The availability check and waiter
+        // registration happen atomically under `lock` inside the
+        // synchronous continuation closure, so no `release()` can
+        // sneak in between and lose the hand-off.
+        let waiter = Waiter()
+        await withTaskCancellationHandler {
+            await withCheckedContinuation {
+                (cont: CheckedContinuation<Void, Never>) in
+                lock.lock()
+                waiter.continuation = cont
+                if available {
+                    available = false
+                    waiter.continuation = nil
+                    lock.unlock()
+                    cont.resume()
+                } else {
+                    waiters.append(waiter)
+                    lock.unlock()
+                }
+            }
+        } onCancel: {
+            // Fires when the task is cancelled while suspended in the
+            // waiter queue. Removes this waiter immediately and resumes
+            // its continuation so the caller wakes up as the mutex
+            // holder, runs body() — which propagates CancellationError
+            // quickly — and releases. Without this, a cancelled task
+            // stalls every subsequent waiter on this path until
+            // release() reaches it in normal turn order.
             lock.lock()
-            if available {
-                available = false
+            if let idx = waiters.firstIndex(where: { $0 === waiter }),
+               let cont = waiter.continuation
+            {
+                waiter.continuation = nil
+                waiters.remove(at: idx)
                 lock.unlock()
                 cont.resume()
             } else {
-                waiters.append(cont)
                 lock.unlock()
             }
         }
@@ -202,13 +229,21 @@ private final class AsyncMutex: @unchecked Sendable {
         lock.lock()
         if let next = waiters.first {
             waiters.removeFirst()
+            let cont = next.continuation
+            next.continuation = nil
             lock.unlock()
             // Hand-off: the resumed waiter becomes the holder; the
             // mutex stays unavailable so a new acquirer queues behind.
-            next.resume()
+            cont?.resume()
         } else {
             available = true
             lock.unlock()
         }
     }
+}
+
+/// Holds the pending continuation for one `AsyncMutex` waiter.
+/// All accesses must be protected by the owning `AsyncMutex`'s lock.
+private final class Waiter: @unchecked Sendable {
+    var continuation: CheckedContinuation<Void, Never>?
 }
