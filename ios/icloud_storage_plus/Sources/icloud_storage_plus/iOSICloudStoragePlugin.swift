@@ -2229,3 +2229,13 @@ class DebugHelper {
     #endif
   }
 }
+
+// FlutterError is an NSObject subclass from the Flutter framework (Flutter)
+// that does not conform to Swift's `Error` protocol. The coordinated
+// delete/move/copy mutation helpers throw typed FlutterError instances at the
+// channel boundary so the outer catch sites can recover them via
+// `error as? FlutterError`. This retroactive conformance bridges the
+// Objective-C type into Swift's error machinery so `throw FlutterError`
+// compiles. If Swift 6 language mode is ever enabled, this must become
+// `extension FlutterError: @retroactive Error {}`.
+extension FlutterError: Error {}
