@@ -5,6 +5,7 @@ import 'package:icloud_storage_plus/models/container_item.dart';
 import 'package:icloud_storage_plus/models/exceptions.dart';
 import 'package:icloud_storage_plus/models/gather_result.dart';
 import 'package:icloud_storage_plus/models/icloud_item_metadata.dart';
+import 'package:icloud_storage_plus/models/icloud_version.dart';
 import 'package:icloud_storage_plus/models/transfer_progress.dart';
 
 export 'models/container_item.dart';
@@ -13,6 +14,7 @@ export 'models/exceptions.dart';
 export 'models/gather_result.dart';
 export 'models/icloud_file.dart';
 export 'models/icloud_item_metadata.dart';
+export 'models/icloud_version.dart';
 export 'models/transfer_progress.dart';
 
 /// The main class for the plugin. Provides streaming, file-path-only access
@@ -530,6 +532,125 @@ class ICloudStorage {
     return ICloudStoragePlatform.instance.listContents(
       containerId: containerId,
       relativePath: relativePath,
+    );
+  }
+
+  /// Enumerate unresolved `NSFileVersion` conflict versions for an item.
+  ///
+  /// [relativePath] is the path within the iCloud container.
+  ///
+  /// Returns a list of [ICloudVersion] descriptors (identifier +
+  /// modificationDate). An item with no unresolved versions returns an
+  /// empty list — never an error.
+  ///
+  /// The plugin only EXPOSES versions; it never auto-resolves or deletes
+  /// losing versions. The app owns conflict policy: enumerate, copy out
+  /// losing versions to badged backups, then mark resolved.
+  static Future<List<ICloudVersion>> enumerateUnresolvedConflictVersions({
+    required String containerId,
+    required String relativePath,
+  }) async {
+    if (relativePath.endsWith('/')) {
+      throw InvalidArgumentException('invalid relativePath: $relativePath');
+    }
+
+    if (relativePath.trim().isEmpty) {
+      throw InvalidArgumentException('invalid relativePath: $relativePath');
+    }
+
+    if (!_validateRelativePath(relativePath)) {
+      throw InvalidArgumentException('invalid relativePath: $relativePath');
+    }
+
+    final versions = await ICloudStoragePlatform.instance
+        .enumerateUnresolvedConflictVersions(
+      containerId: containerId,
+      relativePath: relativePath,
+    );
+
+    return versions;
+  }
+
+  /// Copy a specific losing conflict version's bytes to a caller-provided
+  /// local destination, leaving the live iCloud file untouched.
+  ///
+  /// [relativePath] is the path of the conflicted item within the iCloud
+  /// container. [versionIdentifier] is the opaque identifier from
+  /// [enumerateUnresolvedConflictVersions]. [destinationPath] is the
+  /// absolute local path to write the version's bytes to (the app owns
+  /// this path, typically a badged backup under `Documents/backups/`).
+  ///
+  /// On failure a typed exception is thrown and no partial file is left
+  /// at [destinationPath].
+  static Future<void> copyConflictVersion({
+    required String containerId,
+    required String relativePath,
+    required String versionIdentifier,
+    required String destinationPath,
+  }) async {
+    if (relativePath.endsWith('/')) {
+      throw InvalidArgumentException('invalid relativePath: $relativePath');
+    }
+
+    if (relativePath.trim().isEmpty) {
+      throw InvalidArgumentException('invalid relativePath: $relativePath');
+    }
+
+    if (!_validateRelativePath(relativePath)) {
+      throw InvalidArgumentException('invalid relativePath: $relativePath');
+    }
+
+    if (versionIdentifier.trim().isEmpty) {
+      throw InvalidArgumentException(
+        'invalid versionIdentifier: $versionIdentifier',
+      );
+    }
+
+    if (destinationPath.trim().isEmpty) {
+      throw InvalidArgumentException(
+        'invalid destinationPath: $destinationPath',
+      );
+    }
+
+    await ICloudStoragePlatform.instance.copyConflictVersion(
+      containerId: containerId,
+      relativePath: relativePath,
+      versionIdentifier: versionIdentifier,
+      destinationPath: destinationPath,
+    );
+  }
+
+  /// Mark unresolved conflict versions resolved.
+  ///
+  /// [relativePath] is the path of the conflicted item within the iCloud
+  /// container. When [removeOtherVersions] is true, the other (losing)
+  /// versions are removed after being marked resolved; when false (the
+  /// default) only `isResolved` is set.
+  ///
+  /// This is invoked ONLY on explicit app request, after the app has
+  /// confirmed all losing versions are backed up. It is idempotent and a
+  /// no-op when nothing is unresolved.
+  static Future<void> markConflictResolved({
+    required String containerId,
+    required String relativePath,
+    bool removeOtherVersions = false,
+  }) async {
+    if (relativePath.endsWith('/')) {
+      throw InvalidArgumentException('invalid relativePath: $relativePath');
+    }
+
+    if (relativePath.trim().isEmpty) {
+      throw InvalidArgumentException('invalid relativePath: $relativePath');
+    }
+
+    if (!_validateRelativePath(relativePath)) {
+      throw InvalidArgumentException('invalid relativePath: $relativePath');
+    }
+
+    await ICloudStoragePlatform.instance.markConflictResolved(
+      containerId: containerId,
+      relativePath: relativePath,
+      removeOtherVersions: removeOtherVersions,
     );
   }
 

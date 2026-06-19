@@ -204,6 +204,36 @@ class MockICloudStoragePlatform
   }
 
   List<ContainerItem> listContentsResult = [];
+
+  @override
+  Future<List<ICloudVersion>> enumerateUnresolvedConflictVersions({
+    required String containerId,
+    required String relativePath,
+  }) async {
+    _calls.add('enumerateUnresolvedConflictVersions');
+    return enumerateUnresolvedConflictVersionsResult;
+  }
+
+  List<ICloudVersion> enumerateUnresolvedConflictVersionsResult = [];
+
+  @override
+  Future<void> copyConflictVersion({
+    required String containerId,
+    required String relativePath,
+    required String versionIdentifier,
+    required String destinationPath,
+  }) async {
+    _calls.add('copyConflictVersion');
+  }
+
+  @override
+  Future<void> markConflictResolved({
+    required String containerId,
+    required String relativePath,
+    bool removeOtherVersions = false,
+  }) async {
+    _calls.add('markConflictResolved');
+  }
 }
 
 class LegacyDocumentMetadataPlatform extends ICloudStoragePlatform

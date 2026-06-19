@@ -3,6 +3,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:icloud_storage_plus/icloud_storage_method_channel.dart';
 import 'package:icloud_storage_plus/models/exceptions.dart';
 import 'package:icloud_storage_plus/models/icloud_file.dart';
+import 'package:icloud_storage_plus/models/icloud_version.dart';
 import 'package:icloud_storage_plus/models/transfer_progress.dart';
 
 void main() {
@@ -85,6 +86,15 @@ void main() {
         case 'writeInPlace':
           return null;
         case 'writeInPlaceBytes':
+          return null;
+        case 'enumerateUnresolvedConflictVersions':
+          return [
+            {'identifier': 'v1', 'modificationDate': 100.0},
+            {'identifier': 'v2', 'modificationDate': 200.0},
+          ];
+        case 'copyConflictVersion':
+          return null;
+        case 'markConflictResolved':
           return null;
         default:
           return null;
@@ -547,6 +557,125 @@ void main() {
     expect(args['containerId'], containerId);
     expect(args['fromRelativePath'], 'file');
     expect(args['toRelativePath'], 'file2');
+  });
+
+  group('version exposure tests:', () {
+    test('enumerateUnresolvedConflictVersions sends method + args and '
+        'decodes typed model', () async {
+      final versions =
+          await platform.enumerateUnresolvedConflictVersions(
+        containerId: containerId,
+        relativePath: 'Documents/file',
+      );
+      expect(
+        mockMethodCall.method,
+        'enumerateUnresolvedConflictVersions',
+      );
+      final args = mockArguments();
+      expect(args['containerId'], containerId);
+      expect(args['relativePath'], 'Documents/file');
+
+      expect(versions, hasLength(2));
+      expect(versions[0], isA<ICloudVersion>());
+      expect(versions[0].identifier, 'v1');
+      expect(
+        versions[0].modificationDate,
+        DateTime.fromMillisecondsSinceEpoch(100000),
+      );
+      expect(versions[1].identifier, 'v2');
+      expect(
+        versions[1].modificationDate,
+        DateTime.fromMillisecondsSinceEpoch(200000),
+      );
+    });
+
+    test('enumerateUnresolvedConflictVersions returns empty list when '
+        'native returns null', () async {
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, (methodCall) async {
+        if (methodCall.method == 'enumerateUnresolvedConflictVersions') {
+          return null;
+        }
+        return null;
+      });
+
+      final versions =
+          await platform.enumerateUnresolvedConflictVersions(
+        containerId: containerId,
+        relativePath: 'Documents/file',
+      );
+
+      expect(versions, isEmpty);
+    });
+
+    test('copyConflictVersion sends method + args', () async {
+      await platform.copyConflictVersion(
+        containerId: containerId,
+        relativePath: 'Documents/file',
+        versionIdentifier: 'v1',
+        destinationPath: '/tmp/backup-v1.json',
+      );
+      expect(mockMethodCall.method, 'copyConflictVersion');
+      final args = mockArguments();
+      expect(args['containerId'], containerId);
+      expect(args['relativePath'], 'Documents/file');
+      expect(args['versionIdentifier'], 'v1');
+      expect(args['destinationPath'], '/tmp/backup-v1.json');
+    });
+
+    test('markConflictResolved sends method + args including '
+        'removeOtherVersions', () async {
+      await platform.markConflictResolved(
+        containerId: containerId,
+        relativePath: 'Documents/file',
+        removeOtherVersions: true,
+      );
+      expect(mockMethodCall.method, 'markConflictResolved');
+      final args = mockArguments();
+      expect(args['containerId'], containerId);
+      expect(args['relativePath'], 'Documents/file');
+      expect(args['removeOtherVersions'], true);
+    });
+
+    test('markConflictResolved defaults removeOtherVersions to false',
+        () async {
+      await platform.markConflictResolved(
+        containerId: containerId,
+        relativePath: 'Documents/file',
+      );
+      final args = mockArguments();
+      expect(args['removeOtherVersions'], false);
+    });
+
+    test('version-exposure failures map to ICloudConflictException',
+        () async {
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, (methodCall) async {
+        if (methodCall.method == 'copyConflictVersion') {
+          throw PlatformException(
+            code: 'E_CONFLICT',
+            message: 'version not found',
+            details: {
+              'category': 'conflict',
+              'operation': 'copyConflictVersion',
+              'retryable': false,
+              'relativePath': 'Documents/file',
+            },
+          );
+        }
+        return null;
+      });
+
+      await expectLater(
+        platform.copyConflictVersion(
+          containerId: containerId,
+          relativePath: 'Documents/file',
+          versionIdentifier: 'missing',
+          destinationPath: '/tmp/backup.json',
+        ),
+        throwsA(isA<ICloudConflictException>()),
+      );
+    });
   });
 
   test('documentExists', () async {
