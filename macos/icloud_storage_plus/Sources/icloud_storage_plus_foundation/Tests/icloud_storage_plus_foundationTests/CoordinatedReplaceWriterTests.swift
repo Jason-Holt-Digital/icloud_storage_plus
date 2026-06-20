@@ -102,34 +102,42 @@ final class CoordinatedReplaceWriterTests: XCTestCase {
     func testMacOSCopyPropagatesSourceReadCoordinationErrors() throws {
         let pluginSource = try macOSPluginSource()
 
+        // The M1 CoordinatedIO refactor replaced the pre-CoordinatedIO
+        // `var X: NSError?` / `error: &X` / `if let X` surfacing in the
+        // copy channel block with `CoordinateBridgeError` enum-pattern
+        // surfacing. These assertions verify the CURRENT source surfaces
+        // the source-read coordination failure distinctly (R14).
         XCTAssertTrue(
-            pluginSource.contains("var sourceCoordinationError: NSError?"),
-            "copy() should capture read coordination failures before "
-                + "falling through to destination handling."
+            pluginSource.contains("case .coordination(let sourceCoordinationError):"),
+            "copy() should surface a failed source read coordination via "
+                + "the CoordinateBridgeError.coordination enum case instead "
+                + "of continuing silently."
         )
         XCTAssertTrue(
-            pluginSource.contains("error: &sourceCoordinationError"),
-            "copy() should pass a read coordination error pointer instead "
-                + "of discarding coordination failures."
+            pluginSource.contains("sourceCoordinationError.localizedDescription"),
+            "copy() should inspect the surfaced source-read coordination "
+                + "error instead of discarding it."
         )
         XCTAssertTrue(
-            pluginSource.contains("if let sourceCoordinationError"),
-            "copy() should surface a failed source read coordination "
-                + "instead of continuing silently."
+            pluginSource.contains("case .accessor(let overwriteError):"),
+            "copy() should surface the source-read inner IO failure "
+                + "distinctly from the coordination failure (R14)."
         )
         XCTAssertTrue(
-            pluginSource.contains("var copyCoordinationError: NSError?"),
-            "copy() should also capture read/write coordination failures in "
-                + "the non-overwrite path."
+            pluginSource.contains("case .coordination(let copyCoordinationError):"),
+            "copy() should surface a failed combined read/write "
+                + "coordination via the CoordinateBridgeError.coordination "
+                + "enum case in the non-overwrite path."
         )
         XCTAssertTrue(
-            pluginSource.contains("error: &copyCoordinationError"),
-            "copy() should not discard the combined read/write "
-                + "coordination error."
+            pluginSource.contains("copyCoordinationError.localizedDescription"),
+            "copy() should inspect the surfaced combined coordination "
+                + "error instead of discarding it."
         )
         XCTAssertTrue(
-            pluginSource.contains("if let copyCoordinationError"),
-            "copy() should surface a failed combined coordination instead "
+            pluginSource.contains("case .accessor(let copyIOError):"),
+            "copy() should surface the combined-path inner IO failure "
+                + "distinctly from the coordination failure (R14) instead "
                 + "of leaving the Flutter call without a result."
         )
     }
