@@ -6,40 +6,18 @@ struct UbiquityContainerResolver {
         @escaping @Sendable () -> URL?
     ) async -> URL?
     typealias ResolveContainerURL = (String) -> URL?
-    typealias Delay = (TimeInterval) async throws -> Void
-
-    static let maxAttempts = 2
-    static let maximumRetryDelay: TimeInterval = 0.15
 
     let execute: Execute
     let resolveContainerURL: ResolveContainerURL
-    let delay: Delay
-    let retryDelay: TimeInterval
 
+    /// Single-shot ubiquity container lookup. On failure the resolver
+    /// returns `nil`; the caller (`WriteEntrypointPreflight`) throws the
+    /// same typed `containerUnavailableError` with the same channel code
+    /// it always has.
     func resolve(containerId: String) async -> URL? {
-        for attempt in 0..<Self.maxAttempts {
-            if let containerURL = await execute({
-                resolveContainerURL(containerId)
-            }) {
-                return containerURL
-            }
-
-            if attempt < Self.maxAttempts - 1 {
-                do {
-                    try await delay(clampedRetryDelay)
-                } catch is CancellationError {
-                    return nil
-                } catch {
-                    return nil
-                }
-            }
+        await execute {
+            resolveContainerURL(containerId)
         }
-
-        return nil
-    }
-
-    private var clampedRetryDelay: TimeInterval {
-        max(0, min(retryDelay, Self.maximumRetryDelay))
     }
 }
 
@@ -56,11 +34,6 @@ extension UbiquityContainerResolver {
         },
         resolveContainerURL: {
             FileManager.default.url(forUbiquityContainerIdentifier: $0)
-        },
-        delay: { delay in
-            let nanoseconds = UInt64(delay * 1_000_000_000)
-            try await Task.sleep(nanoseconds: nanoseconds)
-        },
-        retryDelay: maximumRetryDelay
+        }
     )
 }

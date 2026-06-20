@@ -18,9 +18,7 @@ final class UbiquityContainerResolverTests: XCTestCase {
                 lock.unlock()
                 expectation.fulfill()
                 return temporaryDirectory
-            },
-            delay: { _ in XCTFail("should not retry") },
-            retryDelay: UbiquityContainerResolver.maximumRetryDelay
+            }
         )
 
         let containerURL = await resolver.resolve(containerId: "container")
@@ -30,91 +28,44 @@ final class UbiquityContainerResolverTests: XCTestCase {
         XCTAssertEqual(observedMainThreadState, false)
     }
 
-    func testResolveRetriesOnceAfterNilResult() async throws {
+    /// VAL-INV-006: the resolver performs exactly ONE ubiquity container
+    /// lookup (single-shot) and returns the URL on success.
+    func testResolveReturnsContainerURLOnSingleSuccessfulLookup() async throws {
         let temporaryDirectory = try makeTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: temporaryDirectory) }
 
-        var attempts = 0
-        var delays: [TimeInterval] = []
+        var lookupCount = 0
         let resolver = UbiquityContainerResolver(
             execute: { work in work() },
             resolveContainerURL: { _ in
-                attempts += 1
-                if attempts == 2 {
-                    return temporaryDirectory
-                }
-                return nil
-            },
-            delay: { delays.append($0) },
-            retryDelay: UbiquityContainerResolver.maximumRetryDelay
+                lookupCount += 1
+                return temporaryDirectory
+            }
         )
 
         let containerURL = await resolver.resolve(containerId: "container")
 
         XCTAssertEqual(containerURL?.path, temporaryDirectory.path)
-        XCTAssertEqual(attempts, UbiquityContainerResolver.maxAttempts)
-        XCTAssertEqual(
-            delays,
-            [UbiquityContainerResolver.maximumRetryDelay]
-        )
+        XCTAssertEqual(lookupCount, 1, "resolver must be single-shot")
     }
 
-    func testResolveReturnsNilAfterPersistentNilResults() async {
-        var attempts = 0
-        var delays: [TimeInterval] = []
+    /// VAL-INV-006: a nil lookup result is terminal — the resolver
+    /// performs a single lookup only and returns nil, so the caller
+    /// throws the same typed container-unavailable error it always has.
+    func testResolveReturnsNilAfterSingleShotNilResult() async {
+        var lookupCount = 0
         let resolver = UbiquityContainerResolver(
             execute: { work in work() },
             resolveContainerURL: { _ in
-                attempts += 1
+                lookupCount += 1
                 return nil
-            },
-            delay: { delays.append($0) },
-            retryDelay: UbiquityContainerResolver.maximumRetryDelay
+            }
         )
 
         let containerURL = await resolver.resolve(containerId: "missing")
 
         XCTAssertNil(containerURL)
-        XCTAssertEqual(attempts, UbiquityContainerResolver.maxAttempts)
-        XCTAssertEqual(
-            delays,
-            [UbiquityContainerResolver.maximumRetryDelay]
-        )
-    }
-
-    func testRetryDelayIsClampedTo150Milliseconds() async {
-        var delays: [TimeInterval] = []
-        let resolver = UbiquityContainerResolver(
-            execute: { work in work() },
-            resolveContainerURL: { _ in nil },
-            delay: { delays.append($0) },
-            retryDelay: 1
-        )
-
-        _ = await resolver.resolve(containerId: "missing")
-
-        XCTAssertEqual(
-            delays,
-            [UbiquityContainerResolver.maximumRetryDelay]
-        )
-    }
-
-    func testResolveStopsAfterCancelledRetryDelay() async {
-        var attempts = 0
-        let resolver = UbiquityContainerResolver(
-            execute: { work in work() },
-            resolveContainerURL: { _ in
-                attempts += 1
-                return nil
-            },
-            delay: { _ in throw CancellationError() },
-            retryDelay: UbiquityContainerResolver.maximumRetryDelay
-        )
-
-        let containerURL = await resolver.resolve(containerId: "cancelled")
-
-        XCTAssertNil(containerURL)
-        XCTAssertEqual(attempts, 1)
+        XCTAssertEqual(lookupCount, 1, "resolver must be single-shot")
     }
 
     private func makeTemporaryDirectory() throws -> URL {
