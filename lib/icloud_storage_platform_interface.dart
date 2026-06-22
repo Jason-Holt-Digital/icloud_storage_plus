@@ -3,6 +3,7 @@ import 'dart:typed_data';
 import 'package:icloud_storage_plus/icloud_storage_method_channel.dart';
 import 'package:icloud_storage_plus/models/container_item.dart';
 import 'package:icloud_storage_plus/models/gather_result.dart';
+import 'package:icloud_storage_plus/models/icloud_document_change.dart';
 import 'package:icloud_storage_plus/models/icloud_version.dart';
 import 'package:icloud_storage_plus/models/transfer_progress.dart';
 import 'package:plugin_platform_interface/plugin_platform_interface.dart';
@@ -61,6 +62,21 @@ abstract class ICloudStoragePlatform extends PlatformInterface {
     StreamHandler<GatherResult>? onUpdate,
   }) async {
     throw UnimplementedError('gather() has not been implemented.');
+  }
+
+  /// Watch remote-change/document-state events for one open document.
+  ///
+  /// The native implementation reuses the existing `ICloudDocument` presenter.
+  /// It does not create a new presenter type. The stream stays active until
+  /// the Dart subscription is canceled, which tears down native observation.
+  Future<void> watchDocumentChanges({
+    required String containerId,
+    required String relativePath,
+    required StreamHandler<ICloudDocumentChange> onChange,
+  }) async {
+    throw UnimplementedError(
+      'watchDocumentChanges() has not been implemented.',
+    );
   }
 
   /// Get the local path to the iCloud container root, if available.

@@ -4,6 +4,7 @@ import 'package:icloud_storage_plus/icloud_storage_platform_interface.dart';
 import 'package:icloud_storage_plus/models/container_item.dart';
 import 'package:icloud_storage_plus/models/exceptions.dart';
 import 'package:icloud_storage_plus/models/gather_result.dart';
+import 'package:icloud_storage_plus/models/icloud_document_change.dart';
 import 'package:icloud_storage_plus/models/icloud_item_metadata.dart';
 import 'package:icloud_storage_plus/models/icloud_version.dart';
 import 'package:icloud_storage_plus/models/transfer_progress.dart';
@@ -12,6 +13,7 @@ export 'models/container_item.dart';
 export 'models/download_status.dart';
 export 'models/exceptions.dart';
 export 'models/gather_result.dart';
+export 'models/icloud_document_change.dart';
 export 'models/icloud_file.dart';
 export 'models/icloud_item_metadata.dart';
 export 'models/icloud_version.dart';
@@ -77,6 +79,39 @@ class ICloudStorage {
     return ICloudStoragePlatform.instance.gather(
       containerId: containerId,
       onUpdate: onUpdate,
+    );
+  }
+
+  /// Watch remote-change/document-state events for one document path.
+  ///
+  /// The native Darwin implementations reuse the existing `ICloudDocument`
+  /// presenter. Cancel the Dart stream subscription to tear down the native
+  /// observation.
+  ///
+  /// On iOS, a single native state callback can emit more than one typed event
+  /// when multiple document-state flags are active. Debounce or coalesce the
+  /// stream if your caller requires one event per native transition.
+  static Future<void> watchDocumentChanges({
+    required String containerId,
+    required String relativePath,
+    required StreamHandler<ICloudDocumentChange> onChange,
+  }) async {
+    if (relativePath.trim().isEmpty) {
+      throw InvalidArgumentException('invalid relativePath: $relativePath');
+    }
+
+    if (relativePath.endsWith('/')) {
+      throw InvalidArgumentException('invalid relativePath: $relativePath');
+    }
+
+    if (!_validateRelativePath(relativePath)) {
+      throw InvalidArgumentException('invalid relativePath: $relativePath');
+    }
+
+    await ICloudStoragePlatform.instance.watchDocumentChanges(
+      containerId: containerId,
+      relativePath: relativePath,
+      onChange: onChange,
     );
   }
 
