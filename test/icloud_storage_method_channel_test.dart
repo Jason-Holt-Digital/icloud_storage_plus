@@ -871,6 +871,15 @@ void main() {
       );
     });
 
+    test('ICloudDocumentChange.fromMap rejects missing kind', () {
+      expect(
+        () => ICloudDocumentChange.fromMap(const {
+          'relativePath': 'Documents/journal.json',
+        }),
+        throwsA(isA<FormatException>()),
+      );
+    });
+
     test('ICloudDocumentChange.fromMap maps unknown kind fallback', () {
       final change = ICloudDocumentChange.fromMap(const {
         'relativePath': 'Documents/journal.json',

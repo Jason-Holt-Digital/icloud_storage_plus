@@ -83,6 +83,12 @@ class MethodChannelICloudStorage extends ICloudStoragePlatform {
         .receiveBroadcastStream()
         .map<ICloudDocumentChange>(_mapDocumentChangeEvent)
         .handleError((Object error, StackTrace stackTrace) {
+      // PlatformExceptions from _mapDocumentChangeEvent (malformed payload,
+      // code: invalidEvent) have no structured 'category' in their details
+      // and are returned unchanged by _mapStructuredPlatformException.
+      // Native-originated PlatformExceptions carry a structured category and
+      // are mapped to typed ICloudOperationException values. Non-Platform-
+      // Exception errors are re-thrown with their original stack trace.
       if (error is PlatformException) {
         throw _mapStructuredPlatformException(error);
       }

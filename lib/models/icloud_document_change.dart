@@ -18,17 +18,16 @@ class ICloudDocumentChange extends Equatable {
       );
     }
     final kind = map['kind'];
-    if (kind != null && kind is! String) {
+    if (kind is! String) {
       throw FormatException(
         'ICloudDocumentChange.fromMap expected String kind, '
         'got ${kind.runtimeType}',
       );
     }
-    final kindValue = kind == null ? null : kind as String;
 
     return ICloudDocumentChange(
       relativePath: relativePath,
-      kind: ICloudDocumentChangeKind.fromValue(kindValue),
+      kind: ICloudDocumentChangeKind.fromValue(kind),
     );
   }
 
@@ -61,6 +60,12 @@ enum ICloudDocumentChangeKind {
   /// Emitted on iOS when `UIDocument` reports editing is disabled. macOS does
   /// not expose an equivalent `NSDocument` file-presenter state for this
   /// stream.
+  ///
+  /// On iOS, `UIDocument`'s default `presentedItemDidChange` implementation
+  /// temporarily sets `.editingDisabled` then clears it during a remote sync
+  /// revert. An `editingDisabled` event may therefore be an implementation
+  /// artifact of the revert mechanism rather than a genuine editing
+  /// restriction imposed by the app or system.
   editingDisabled('editingDisabled'),
 
   /// The native payload contained an unknown kind.
@@ -71,8 +76,11 @@ enum ICloudDocumentChangeKind {
   /// Wire value sent over the event channel.
   final String value;
 
-  /// Parses a native event kind.
-  static ICloudDocumentChangeKind fromValue(String? value) {
+  /// Parses a native event kind string.
+  ///
+  /// Unrecognised values map to [ICloudDocumentChangeKind.unknown] for
+  /// forward-compatibility with new kinds added in future native releases.
+  static ICloudDocumentChangeKind fromValue(String value) {
     return ICloudDocumentChangeKind.values.firstWhere(
       (kind) => kind.value == value,
       orElse: () => ICloudDocumentChangeKind.unknown,
