@@ -23,6 +23,12 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
     queue.qualityOfService = .userInitiated
     return queue
   }()
+  private var documentChangeRegistrations: [
+    String: DocumentChangeRegistration
+  ] = [:]
+  private let documentChangeRegistrationsQueue = DispatchQueue(
+    label: "icloud_storage_plus.document_change_registrations"
+  )
   private let ubiquityContainerResolver: UbiquityContainerResolver
 
   init(
@@ -38,6 +44,12 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
     }
     for session in sessions {
       session.cancel()
+    }
+    let registrations = documentChangeRegistrationsQueue.sync {
+      Array(documentChangeRegistrations.values)
+    }
+    for registration in registrations {
+      registration.cancel()
     }
   }
 
@@ -70,6 +82,8 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
       icloudAvailable(result)
     case "gather":
       gather(call, result)
+    case "watchDocumentChanges":
+      watchDocumentChanges(call, result)
     case "uploadFile":
       uploadFile(call, result)
     case "downloadFile":
@@ -124,12 +138,14 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
     operation: String,
     relativePath: String? = nil,
     result: @escaping FlutterResult,
+    onFailure: (() -> Void)? = nil,
     onResolved: @escaping (URL) -> Void
   ) {
     Task { @MainActor [self] in
       guard let containerURL = await ubiquityContainerResolver.resolve(
         containerId: containerId
       ) else {
+        onFailure?()
         result(containerAccessError(
           operation: operation,
           relativePath: relativePath
@@ -218,6 +234,95 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
       }
     }
     session.start()
+  }
+
+  /// Watches the existing ICloudDocument presenter's document-change events.
+  private func watchDocumentChanges(
+    _ call: FlutterMethodCall,
+    _ result: @escaping FlutterResult
+  ) {
+    guard let args = call.arguments as? Dictionary<String, Any>,
+          let containerId = args["containerId"] as? String,
+          let relativePath = args["relativePath"] as? String,
+          let eventChannelName = args["eventChannelName"] as? String,
+          !eventChannelName.isEmpty
+    else {
+      result(argumentError)
+      return
+    }
+
+    resolveContainerURL(
+      containerId: containerId,
+      operation: "watchDocumentChanges",
+      relativePath: relativePath,
+      result: result,
+      onFailure: { [weak self] in
+        self?.removeStreamHandler(eventChannelName)
+      }
+    ) { [self] containerURL in
+      startDocumentChangeObservation(
+        containerURL: containerURL,
+        relativePath: relativePath,
+        eventChannelName: eventChannelName,
+        result: result
+      )
+    }
+  }
+
+  private func startDocumentChangeObservation(
+    containerURL: URL,
+    relativePath: String,
+    eventChannelName: String,
+    result: @escaping FlutterResult
+  ) {
+    guard let streamHandler = registeredStreamHandler(for: eventChannelName)
+    else {
+      result(missingEventHandlerError(
+        eventChannelName: eventChannelName,
+        operation: "watchDocumentChanges",
+        relativePath: relativePath
+      ))
+      return
+    }
+
+    let documentURL = containerURL.appendingPathComponent(relativePath)
+    let document = ICloudDocument(fileURL: documentURL)
+    let observation = DocumentChangeObservation(
+      relativePath: relativePath,
+      onStart: { [weak document] in
+        guard let document else { return }
+        NSFileCoordinator.addFilePresenter(document)
+      },
+      onCancel: { [weak document] in
+        guard let document else { return }
+        NSFileCoordinator.removeFilePresenter(document)
+      },
+      emit: { payload in
+        DispatchQueue.main.async {
+          streamHandler.setEvent(payload)
+        }
+      }
+    )
+    document.changeObservation = observation
+    let registration = DocumentChangeRegistration(
+      document: document,
+      observation: observation
+    )
+    setDocumentChangeRegistration(registration, for: eventChannelName)
+    streamHandler.onCancelHandler = { [weak self, weak registration] in
+      guard let self, let registration else { return }
+
+      registration.cancel()
+      if self.removeDocumentChangeRegistration(
+        eventChannelName,
+        matching: registration
+      ) {
+        self.removeStreamHandler(eventChannelName)
+      }
+    }
+
+    observation.start()
+    result(nil)
   }
   
   /// Adds observers for metadata gather and update notifications.
@@ -1935,6 +2040,33 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
     }
   }
 
+  private func setDocumentChangeRegistration(
+    _ registration: DocumentChangeRegistration,
+    for eventChannelName: String
+  ) {
+    let existingRegistration = documentChangeRegistrationsQueue.sync {
+      let existing = documentChangeRegistrations[eventChannelName]
+      documentChangeRegistrations[eventChannelName] = registration
+      return existing
+    }
+    existingRegistration?.cancel()
+  }
+
+  private func removeDocumentChangeRegistration(
+    _ eventChannelName: String,
+    matching registration: DocumentChangeRegistration? = nil
+  ) -> Bool {
+    documentChangeRegistrationsQueue.sync {
+      if let registration,
+         documentChangeRegistrations[eventChannelName] !== registration {
+        return false
+      }
+
+      documentChangeRegistrations[eventChannelName] = nil
+      return true
+    }
+  }
+
   private func reserveProgressUpdate(
     _ progress: Double,
     eventChannelName: String
@@ -1997,6 +2129,22 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
       code: "E_CTR",
       message: "Invalid containerId, or user is not signed in, or user disabled iCloud permission",
       category: "containerAccess",
+      operation: operation,
+      retryable: false,
+      relativePath: relativePath
+    )
+  }
+
+  private func missingEventHandlerError(
+    eventChannelName: String,
+    operation: String,
+    relativePath: String? = nil
+  ) -> FlutterError {
+    flutterError(
+      code: "E_NO_HANDLER",
+      message: "Event channel '\(eventChannelName)' not created. Call "
+        + "createEventChannel first.",
+      category: "invalidArgument",
       operation: operation,
       retryable: false,
       relativePath: relativePath
@@ -2145,6 +2293,37 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
       nativeError: nsError,
       underlying: String(describing: error)
     )
+  }
+}
+
+private final class DocumentChangeRegistration {
+  private let document: ICloudDocument
+  private let observation: DocumentChangeObservation
+  private let cancelLock = NSLock()
+  private var didCancel = false
+
+  init(document: ICloudDocument, observation: DocumentChangeObservation) {
+    self.document = document
+    self.observation = observation
+  }
+
+  deinit {
+    cancel()
+  }
+
+  func cancel() {
+    let shouldCancel: Bool = {
+      cancelLock.lock()
+      defer { cancelLock.unlock() }
+
+      guard !didCancel else { return false }
+      didCancel = true
+      return true
+    }()
+    guard shouldCancel else { return }
+
+    observation.cancel()
+    document.changeObservation = nil
   }
 }
 

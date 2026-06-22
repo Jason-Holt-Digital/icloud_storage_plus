@@ -57,6 +57,9 @@ class PlatformExceptionCode {
   /// side.
   static const String initializationError = 'E_INIT';
 
+  /// The code indicates an event channel was not created before use.
+  static const String noEventHandler = 'E_NO_HANDLER';
+
   /// The code indicates the native layer sent an invalid event type
   /// This represents a bug in the plugin. Please open a GitHub issue if you
   /// encounter this error.

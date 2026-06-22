@@ -2,6 +2,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:icloud_storage_plus/icloud_storage_method_channel.dart';
 import 'package:icloud_storage_plus/models/exceptions.dart';
+import 'package:icloud_storage_plus/models/icloud_document_change.dart';
 import 'package:icloud_storage_plus/models/icloud_file.dart';
 import 'package:icloud_storage_plus/models/icloud_version.dart';
 import 'package:icloud_storage_plus/models/transfer_progress.dart';
@@ -95,6 +96,8 @@ void main() {
         case 'copyConflictVersion':
           return null;
         case 'markConflictResolved':
+          return null;
+        case 'watchDocumentChanges':
           return null;
         default:
           return null;
@@ -560,10 +563,10 @@ void main() {
   });
 
   group('version exposure tests:', () {
-    test('enumerateUnresolvedConflictVersions sends method + args and '
+    test(
+        'enumerateUnresolvedConflictVersions sends method + args and '
         'decodes typed model', () async {
-      final versions =
-          await platform.enumerateUnresolvedConflictVersions(
+      final versions = await platform.enumerateUnresolvedConflictVersions(
         containerId: containerId,
         relativePath: 'Documents/file',
       );
@@ -589,7 +592,8 @@ void main() {
       );
     });
 
-    test('enumerateUnresolvedConflictVersions returns empty list when '
+    test(
+        'enumerateUnresolvedConflictVersions returns empty list when '
         'native returns null', () async {
       TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
           .setMockMethodCallHandler(channel, (methodCall) async {
@@ -599,8 +603,7 @@ void main() {
         return null;
       });
 
-      final versions =
-          await platform.enumerateUnresolvedConflictVersions(
+      final versions = await platform.enumerateUnresolvedConflictVersions(
         containerId: containerId,
         relativePath: 'Documents/file',
       );
@@ -623,7 +626,8 @@ void main() {
       expect(args['destinationPath'], '/tmp/backup-v1.json');
     });
 
-    test('markConflictResolved sends method + args including '
+    test(
+        'markConflictResolved sends method + args including '
         'removeOtherVersions', () async {
       await platform.markConflictResolved(
         containerId: containerId,
@@ -647,8 +651,7 @@ void main() {
       expect(args['removeOtherVersions'], false);
     });
 
-    test('version-exposure failures map to ICloudConflictException',
-        () async {
+    test('version-exposure failures map to ICloudConflictException', () async {
       TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
           .setMockMethodCallHandler(channel, (methodCall) async {
         if (methodCall.method == 'copyConflictVersion') {
@@ -675,6 +678,206 @@ void main() {
         ),
         throwsA(isA<ICloudConflictException>()),
       );
+    });
+  });
+
+  group('document change stream tests:', () {
+    test('watchDocumentChanges sends method args and maps typed payload',
+        () async {
+      mockStreamHandler = MockStreamHandler.inline(
+        onListen: (arguments, events) {
+          events
+            ..success({
+              'relativePath': 'Documents/journal.json',
+              'kind': 'remoteChange',
+            })
+            ..success({
+              'relativePath': 'Documents/journal.json',
+              'kind': 'conflict',
+            })
+            ..success({
+              'relativePath': 'Documents/journal.json',
+              'kind': 'savingError',
+            })
+            ..success({
+              'relativePath': 'Documents/journal.json',
+              'kind': 'editingDisabled',
+            })
+            ..endOfStream();
+        },
+      );
+
+      late Stream<ICloudDocumentChange> changeStream;
+
+      await platform.watchDocumentChanges(
+        containerId: containerId,
+        relativePath: 'Documents/journal.json',
+        onChange: (stream) {
+          changeStream = stream;
+        },
+      );
+
+      expect(mockMethodCalls.map((call) => call.method), [
+        'createEventChannel',
+        'watchDocumentChanges',
+      ]);
+      final args = mockArguments();
+      expect(args['containerId'], containerId);
+      expect(args['relativePath'], 'Documents/journal.json');
+      expect(args['eventChannelName'], lastEventChannelName);
+
+      final events = await changeStream.toList();
+      expect(events, [
+        const ICloudDocumentChange(
+          relativePath: 'Documents/journal.json',
+          kind: ICloudDocumentChangeKind.remoteChange,
+        ),
+        const ICloudDocumentChange(
+          relativePath: 'Documents/journal.json',
+          kind: ICloudDocumentChangeKind.conflict,
+        ),
+        const ICloudDocumentChange(
+          relativePath: 'Documents/journal.json',
+          kind: ICloudDocumentChangeKind.savingError,
+        ),
+        const ICloudDocumentChange(
+          relativePath: 'Documents/journal.json',
+          kind: ICloudDocumentChangeKind.editingDisabled,
+        ),
+      ]);
+    });
+
+    test('watchDocumentChanges maps stream errors to typed exceptions',
+        () async {
+      mockStreamHandler = MockStreamHandler.inline(
+        onListen: (arguments, events) {
+          events.error(
+            code: PlatformExceptionCode.coordination,
+            message: 'Document observation failed',
+            details: {
+              'category': 'coordination',
+              'operation': 'watchDocumentChanges',
+              'retryable': false,
+              'relativePath': 'Documents/journal.json',
+            },
+          );
+        },
+      );
+
+      late Stream<ICloudDocumentChange> changeStream;
+
+      await platform.watchDocumentChanges(
+        containerId: containerId,
+        relativePath: 'Documents/journal.json',
+        onChange: (stream) {
+          changeStream = stream;
+        },
+      );
+
+      await expectLater(
+        changeStream,
+        emitsError(isA<ICloudCoordinationException>()),
+      );
+    });
+
+    test('watchDocumentChanges does not expose stream when native start fails',
+        () async {
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, (methodCall) async {
+        mockMethodCall = methodCall;
+        mockMethodCalls.add(methodCall);
+        if (methodCall.method == 'createEventChannel') {
+          final args = mockArguments();
+          lastEventChannelName = args['eventChannelName'] as String?;
+          if (lastEventChannelName != null && mockStreamHandler != null) {
+            final eventChannel = EventChannel(lastEventChannelName!);
+            TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+                .setMockStreamHandler(eventChannel, mockStreamHandler);
+          }
+          return null;
+        }
+        if (methodCall.method == 'watchDocumentChanges') {
+          throw PlatformException(
+            code: PlatformExceptionCode.iCloudConnectionOrPermission,
+            message: 'iCloud container unavailable',
+            details: {
+              'category': 'containerAccess',
+              'operation': 'watchDocumentChanges',
+              'retryable': true,
+              'relativePath': 'Documents/journal.json',
+            },
+          );
+        }
+        return null;
+      });
+
+      late Stream<ICloudDocumentChange> changeStream;
+
+      await expectLater(
+        platform.watchDocumentChanges(
+          containerId: containerId,
+          relativePath: 'Documents/journal.json',
+          onChange: (stream) {
+            changeStream = stream;
+          },
+        ),
+        throwsA(isA<ICloudContainerAccessException>()),
+      );
+
+      await expectLater(
+        changeStream,
+        emitsError(isA<ICloudContainerAccessException>()),
+      );
+      expect(mockMethodCalls.map((call) => call.method), [
+        'createEventChannel',
+        'watchDocumentChanges',
+      ]);
+    });
+
+    test('watchDocumentChanges surfaces malformed payloads with stable code',
+        () async {
+      mockStreamHandler = MockStreamHandler.inline(
+        onListen: (arguments, events) {
+          events.success({'relativePath': 'Documents/journal.json'});
+        },
+      );
+
+      late Stream<ICloudDocumentChange> changeStream;
+
+      await platform.watchDocumentChanges(
+        containerId: containerId,
+        relativePath: 'Documents/journal.json',
+        onChange: (stream) {
+          changeStream = stream;
+        },
+      );
+
+      await expectLater(
+        changeStream,
+        emitsError(
+          isA<PlatformException>().having(
+            (error) => error.code,
+            'code',
+            PlatformExceptionCode.invalidEvent,
+          ),
+        ),
+      );
+    });
+
+    test('ICloudDocumentChange.fromMap rejects missing relativePath', () {
+      expect(
+        () => ICloudDocumentChange.fromMap(const {'kind': 'remoteChange'}),
+        throwsA(isA<FormatException>()),
+      );
+    });
+
+    test('ICloudDocumentChange.fromMap maps unknown kind fallback', () {
+      final change = ICloudDocumentChange.fromMap(const {
+        'relativePath': 'Documents/journal.json',
+        'kind': 'newKind',
+      });
+
+      expect(change.kind, ICloudDocumentChangeKind.unknown);
     });
   });
 

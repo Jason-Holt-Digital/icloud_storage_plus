@@ -16,6 +16,23 @@ class ICloudDocument: UIDocument {
     /// Error occurred during the last operation (if any).
     var lastError: Error?
 
+    /// Event-channel observation state for this existing document presenter.
+    var changeObservation: DocumentChangeObservation? {
+        get {
+            changeObservationLock.lock()
+            defer { changeObservationLock.unlock() }
+            return _changeObservation
+        }
+        set {
+            changeObservationLock.lock()
+            _changeObservation = newValue
+            changeObservationLock.unlock()
+        }
+    }
+
+    private let changeObservationLock = NSLock()
+    private var _changeObservation: DocumentChangeObservation?
+
     // MARK: - UIDocument Override Methods
 
     override func contents(forType typeName: String) throws -> Any {
@@ -91,7 +108,11 @@ class ICloudDocument: UIDocument {
     }
 
     @objc private func documentStateChanged() {
+        var emittedSpecificState = false
+
         if documentState.contains(.inConflict) {
+            changeObservation?.emit(kind: .conflict)
+            emittedSpecificState = true
             // Conflict policy is app-owned. The plugin only surfaces the
             // conflict; it never auto-resolves-and-deletes losing
             // `NSFileVersion`s. The app enumerates, copies out, and marks
@@ -102,11 +123,19 @@ class ICloudDocument: UIDocument {
         }
 
         if documentState.contains(.savingError) {
+            changeObservation?.emit(kind: .savingError)
+            emittedSpecificState = true
             DebugHelper.log("Document saving error: \(fileURL.lastPathComponent)")
         }
 
         if documentState.contains(.editingDisabled) {
+            changeObservation?.emit(kind: .editingDisabled)
+            emittedSpecificState = true
             DebugHelper.log("Document editing disabled: \(fileURL.lastPathComponent)")
+        }
+
+        if !emittedSpecificState {
+            changeObservation?.emit(kind: .remoteChange)
         }
     }
 

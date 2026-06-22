@@ -11,7 +11,29 @@ class ICloudDocument: NSDocument {
     /// Error occurred during the last operation (if any).
     var lastError: Error?
 
+    /// Event-channel observation state for this existing document presenter.
+    var changeObservation: DocumentChangeObservation? {
+        get {
+            changeObservationLock.lock()
+            defer { changeObservationLock.unlock() }
+            return _changeObservation
+        }
+        set {
+            changeObservationLock.lock()
+            _changeObservation = newValue
+            changeObservationLock.unlock()
+        }
+    }
+
+    private let changeObservationLock = NSLock()
+    private var _changeObservation: DocumentChangeObservation?
+
     // MARK: - NSDocument Override Methods
+
+    convenience init(fileURL: URL) {
+        self.init()
+        self.fileURL = fileURL
+    }
 
     override func read(from url: URL, ofType typeName: String) throws {
         guard let destinationURL = destinationURL else {
@@ -76,11 +98,14 @@ class ICloudDocument: NSDocument {
         super.presentedItemDidChange()
 
         guard let fileURL = fileURL else { return }
+
         guard let conflictVersions = NSFileVersion.unresolvedConflictVersionsOfItem(at: fileURL),
               !conflictVersions.isEmpty else {
+            changeObservation?.emit(kind: .remoteChange)
             return
         }
 
+        changeObservation?.emit(kind: .conflict)
         // Conflict policy is app-owned. The plugin only surfaces the
         // conflict; it never auto-resolves-and-deletes losing
         // `NSFileVersion`s. The app enumerates, copies out, and marks

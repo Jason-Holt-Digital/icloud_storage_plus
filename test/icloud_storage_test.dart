@@ -77,6 +77,15 @@ class MockICloudStoragePlatform
   }
 
   @override
+  Future<void> watchDocumentChanges({
+    required String containerId,
+    required String relativePath,
+    required StreamHandler<ICloudDocumentChange> onChange,
+  }) async {
+    _calls.add('watchDocumentChanges');
+  }
+
+  @override
   Future<void> uploadFile({
     required String containerId,
     required String localPath,
@@ -324,6 +333,50 @@ void main() {
       final result = await ICloudStorage.gather(containerId: containerId);
       expect(result.files, isEmpty);
       expect(result.invalidEntries, isEmpty);
+    });
+
+    test('watchDocumentChanges', () async {
+      await ICloudStorage.watchDocumentChanges(
+        containerId: containerId,
+        relativePath: 'Documents/journal.json',
+        onChange: (_) {},
+      );
+
+      expect(fakePlatform.calls.last, 'watchDocumentChanges');
+    });
+
+    test('watchDocumentChanges rejects trailing slash relativePath', () async {
+      expect(
+        () async => ICloudStorage.watchDocumentChanges(
+          containerId: containerId,
+          relativePath: 'Documents/folder/',
+          onChange: (_) {},
+        ),
+        throwsA(isA<InvalidArgumentException>()),
+      );
+    });
+
+    test('watchDocumentChanges rejects blank relativePath', () async {
+      expect(
+        () async => ICloudStorage.watchDocumentChanges(
+          containerId: containerId,
+          relativePath: '   ',
+          onChange: (_) {},
+        ),
+        throwsA(isA<InvalidArgumentException>()),
+      );
+    });
+
+    test('watchDocumentChanges rejects invalid relativePath characters',
+        () async {
+      expect(
+        () async => ICloudStorage.watchDocumentChanges(
+          containerId: containerId,
+          relativePath: 'Documents/journal:1.json',
+          onChange: (_) {},
+        ),
+        throwsA(isA<InvalidArgumentException>()),
+      );
     });
 
     group('uploadFile tests:', () {

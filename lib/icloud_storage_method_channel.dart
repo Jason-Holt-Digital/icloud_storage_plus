@@ -6,6 +6,7 @@ import 'package:icloud_storage_plus/icloud_storage_platform_interface.dart';
 import 'package:icloud_storage_plus/models/container_item.dart';
 import 'package:icloud_storage_plus/models/exceptions.dart';
 import 'package:icloud_storage_plus/models/gather_result.dart';
+import 'package:icloud_storage_plus/models/icloud_document_change.dart';
 import 'package:icloud_storage_plus/models/icloud_file.dart';
 import 'package:icloud_storage_plus/models/icloud_version.dart';
 import 'package:icloud_storage_plus/models/transfer_progress.dart';
@@ -58,6 +59,88 @@ class MethodChannelICloudStorage extends ICloudStoragePlatform {
     });
 
     return _mapFilesFromDynamicList(mapList);
+  }
+
+  @override
+  Future<void> watchDocumentChanges({
+    required String containerId,
+    required String relativePath,
+    required StreamHandler<ICloudDocumentChange> onChange,
+  }) async {
+    final eventChannelName = _generateEventChannelName(
+      'documentChanges',
+      containerId,
+      relativePath,
+    );
+
+    await _invokeMethod<void>(
+      'createEventChannel',
+      {'eventChannelName': eventChannelName},
+    );
+
+    final eventChannel = EventChannel(eventChannelName);
+    final eventStream = eventChannel
+        .receiveBroadcastStream()
+        .map<ICloudDocumentChange>(_mapDocumentChangeEvent)
+        .handleError((Object error, StackTrace stackTrace) {
+      if (error is PlatformException) {
+        throw _mapStructuredPlatformException(error);
+      }
+      Error.throwWithStackTrace(error, stackTrace);
+    });
+
+    StreamSubscription<ICloudDocumentChange>? subscription;
+    late final StreamController<ICloudDocumentChange> controller;
+    controller = StreamController<ICloudDocumentChange>(
+      onListen: () {
+        subscription = eventStream.listen(
+          controller.add,
+          onError: controller.addError,
+          onDone: controller.close,
+        );
+      },
+      onCancel: () async {
+        await subscription?.cancel();
+      },
+    );
+
+    onChange(controller.stream);
+
+    try {
+      await _invokeMethod<void>('watchDocumentChanges', {
+        'containerId': containerId,
+        'relativePath': relativePath,
+        'eventChannelName': eventChannelName,
+      });
+    } on PlatformException catch (error, stackTrace) {
+      final mapped = _mapStructuredPlatformException(error);
+      controller.addError(mapped, stackTrace);
+      unawaited(controller.close());
+      Error.throwWithStackTrace(mapped, stackTrace);
+    } catch (error, stackTrace) {
+      controller.addError(error, stackTrace);
+      unawaited(controller.close());
+      Error.throwWithStackTrace(error, stackTrace);
+    }
+  }
+
+  ICloudDocumentChange _mapDocumentChangeEvent(Object? event) {
+    if (event is! Map) {
+      throw PlatformException(
+        code: PlatformExceptionCode.invalidEvent,
+        message: 'Unexpected document change event type: '
+            '${event.runtimeType}',
+        details: event,
+      );
+    }
+    if (event['relativePath'] is! String || event['kind'] is! String) {
+      throw PlatformException(
+        code: PlatformExceptionCode.invalidEvent,
+        message: 'Malformed document change event payload',
+        details: event,
+      );
+    }
+    return ICloudDocumentChange.fromMap(event);
   }
 
   @override
