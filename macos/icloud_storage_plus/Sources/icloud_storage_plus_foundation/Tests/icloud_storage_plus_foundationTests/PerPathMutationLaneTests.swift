@@ -65,23 +65,33 @@ private func awaitTaskValue<T: Sendable>(
     _ task: Task<T, Never>,
     timeoutNanoseconds: UInt64
 ) async throws -> T {
-    try await withThrowingTaskGroup(of: T.self) { group in
-        group.addTask {
-            await withTaskCancellationHandler(
-                operation: { await task.value },
-                onCancel: { task.cancel() }
-            )
+    // Resolve the continuation from whichever fires first: the task result
+    // or the timeout. A withThrowingTaskGroup alternative hangs because the
+    // group must await ALL children before it can throw — so a stuck
+    // task.value child blocks the timeout from propagating.
+    final class Resolver<V: Sendable>: @unchecked Sendable {
+        private let lock = NSLock()
+        private var settled = false
+        private let continuation: CheckedContinuation<V, Error>
+        init(_ continuation: CheckedContinuation<V, Error>) {
+            self.continuation = continuation
         }
-        group.addTask {
-            try await Task.sleep(nanoseconds: timeoutNanoseconds)
-            throw LaneTestTimeout.timedOut
+        func settle(_ result: Result<V, Error>) {
+            lock.lock()
+            let first = !settled
+            if first { settled = true }
+            lock.unlock()
+            if first { continuation.resume(with: result) }
         }
-
-        guard let result = try await group.next() else {
-            throw LaneTestTimeout.timedOut
+    }
+    return try await withCheckedThrowingContinuation { continuation in
+        let resolver = Resolver(continuation)
+        Task { resolver.settle(.success(await task.value)) }
+        Task {
+            try? await Task.sleep(nanoseconds: timeoutNanoseconds)
+            task.cancel()
+            resolver.settle(.failure(LaneTestTimeout.timedOut))
         }
-        group.cancelAll()
-        return result
     }
 }
 
