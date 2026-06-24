@@ -57,6 +57,31 @@ private final class OverlapTracker: @unchecked Sendable {
     }
 }
 
+private enum LaneTestTimeout: Error {
+    case timedOut
+}
+
+private func awaitTaskValue<T: Sendable>(
+    _ task: Task<T, Never>,
+    timeoutNanoseconds: UInt64
+) async throws -> T {
+    try await withThrowingTaskGroup(of: T.self) { group in
+        group.addTask {
+            await task.value
+        }
+        group.addTask {
+            try await Task.sleep(nanoseconds: timeoutNanoseconds)
+            throw LaneTestTimeout.timedOut
+        }
+
+        guard let result = try await group.next() else {
+            throw LaneTestTimeout.timedOut
+        }
+        group.cancelAll()
+        return result
+    }
+}
+
 final class PerPathMutationLaneTests: XCTestCase {
     private func makeLane() -> PerPathMutationLane {
         PerPathMutationLane()
@@ -289,7 +314,7 @@ final class PerPathMutationLaneTests: XCTestCase {
 
         // Submit sequentially so submission order is deterministic.
         for index in 0..<count {
-            _ = await try? lane.withLane(for: url) {
+            _ = try? await lane.withLane(for: url) {
                 log.append("op\(index).start")
                 try await Task.sleep(nanoseconds: 5_000_000)
                 log.append("op\(index).end")
@@ -317,7 +342,7 @@ final class PerPathMutationLaneTests: XCTestCase {
         let distinctPaths = 10
 
         for index in 0..<distinctPaths {
-            _ = await try? lane.withLane(for: URL(
+            _ = try? await lane.withLane(for: URL(
                 fileURLWithPath: "/tmp/container/file-\(index).json"
             )) {
                 try await Task.sleep(nanoseconds: 1_000_000)
@@ -382,6 +407,91 @@ final class PerPathMutationLaneTests: XCTestCase {
         XCTAssertTrue(log.events.contains("opQ.end"))
     }
 
+    /// M8 hardening: a task cancelled while suspended in an
+    /// `AsyncMutex` waiter queue is removed immediately instead of
+    /// lingering until normal FIFO hand-off reaches it.
+    func testCancelledWaiterIsRemovedBeforeLaneRelease() async throws {
+        let lane = makeLane()
+        let log = LockedEventLog()
+        let url = URL(fileURLWithPath: "/tmp/container/cancelled.json")
+
+        let blockerStarted = DispatchSemaphore(value: 0)
+        let releaseBlocker = DispatchSemaphore(value: 0)
+
+        let blocker = Task {
+            try await lane.withLane(for: url) {
+                log.append("blocker.start")
+                blockerStarted.signal()
+                releaseBlocker.wait()
+                log.append("blocker.end")
+            }
+        }
+        defer {
+            releaseBlocker.signal()
+            blocker.cancel()
+        }
+        blockerStarted.wait()
+
+        let waiter = Task<Result<Void, Error>, Never> {
+            do {
+                try await lane.withLane(for: url) {
+                    log.append("cancelled.body")
+                }
+                return .success(())
+            } catch {
+                log.append("cancelled.error")
+                return .failure(error)
+            }
+        }
+        defer { waiter.cancel() }
+
+        // Give the waiter a deterministic chance to suspend behind the
+        // blocker, then cancel while it is still queued.
+        try await Task.sleep(nanoseconds: 30_000_000)
+        waiter.cancel()
+
+        let waiterResult: Result<Void, Error>
+        do {
+            waiterResult = try await awaitTaskValue(
+                waiter,
+                timeoutNanoseconds: 1_000_000_000
+            )
+        } catch {
+            XCTFail("cancelled waiter did not complete until lane release")
+            waiterResult = .success(())
+        }
+
+        switch waiterResult {
+        case .failure(let error):
+            XCTAssertTrue(
+                error is CancellationError,
+                "expected CancellationError, got \(error)"
+            )
+        case .success:
+            XCTFail("cancelled waiter unexpectedly acquired the lane")
+        }
+        XCTAssertFalse(
+            log.events.contains("cancelled.body"),
+            "cancelled waiter must not run the lane body"
+        )
+
+        let follower = Task {
+            try await lane.withLane(for: url) {
+                log.append("follower.start")
+            }
+        }
+        releaseBlocker.signal()
+        _ = try await blocker.value
+        _ = try await follower.value
+
+        XCTAssertTrue(log.events.contains("blocker.end"))
+        XCTAssertTrue(log.events.contains("follower.start"))
+        XCTAssertFalse(
+            log.events.contains("cancelled.body"),
+            "cancelled waiter must stay removed after blocker release"
+        )
+    }
+
     /// VAL-MUT-027: bulk (multi-distinct-path) and interactive mutations
     /// to unrelated paths run concurrently on separate lanes.
     func testBulkAndInteractiveRunOnSeparateLanes() async throws {
@@ -398,7 +508,7 @@ final class PerPathMutationLaneTests: XCTestCase {
             await withTaskGroup(of: Void.self) { group in
                 for index in 0..<4 {
                     group.addTask {
-                        _ = await try? lane.withLane(for: URL(
+                        _ = try? await lane.withLane(for: URL(
                             fileURLWithPath: "/tmp/container/bulk-\(index).json"
                         )) {
                             bulkStarted.signal()

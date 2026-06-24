@@ -15,15 +15,16 @@ import Foundation
 /// possible.
 ///
 /// Implementation: each normalized path owns a cooperative async mutex
-/// (a `withCheckedContinuation`-based binary semaphore with a FIFO
-/// waiter queue). The calling async task SUSPENDS cooperatively (it
-/// does NOT block any thread) while waiting for its lane turn, then
-/// runs the (possibly async) body on the Swift cooperative pool. No
-/// `DispatchSemaphore` is used to bridge the body, and no libdispatch
-/// worker thread is blocked for the body's full duration — so
-/// high-fan-out bulk mutations cannot exhaust the libdispatch worker
-/// pool, and a burst of concurrent distinct-path ops cannot starve
-/// other Swift async work.
+/// (a cancellation-aware throwing-continuation binary semaphore with a
+/// FIFO waiter queue). The calling async task SUSPENDS cooperatively
+/// (it does NOT block any thread) while waiting for its lane turn, then
+/// runs the (possibly async) body on the Swift cooperative pool. If a
+/// suspended task is cancelled before its turn, its waiter is removed
+/// from the FIFO queue immediately. No `DispatchSemaphore` is used to
+/// bridge the body, and no libdispatch worker thread is blocked for the
+/// body's full duration — so high-fan-out bulk mutations cannot exhaust
+/// the libdispatch worker pool, and a burst of concurrent distinct-path
+/// ops cannot starve other Swift async work.
 ///
 /// The blocking `NSFileCoordinator.coordinate(...)` call itself is
 /// never run on a cooperative-pool thread: the coordinated
@@ -82,17 +83,23 @@ final class PerPathMutationLane: @unchecked Sendable {
     ) async throws -> T {
         let key = Self.normalizationKey(for: url)
         let lane = acquireLane(key)
-        await lane.mutex.acquire()
         do {
-            let value = try await body()
-            releaseLane(key)
-            lane.mutex.release()
-            return value
+            try await lane.mutex.acquire()
         } catch {
             releaseLane(key)
-            lane.mutex.release()
             throw error
         }
+        if Task.isCancelled {
+            releaseLane(key)
+            lane.mutex.release()
+            throw CancellationError()
+        }
+
+        defer {
+            releaseLane(key)
+            lane.mutex.release()
+        }
+        return try await body()
     }
 
     /// Serializes `body` against BOTH endpoint lanes (cross-path op).
@@ -113,23 +120,42 @@ final class PerPathMutationLane: @unchecked Sendable {
 
         let (first, second) = keyA < keyB ? (keyA, keyB) : (keyB, keyA)
         let laneFirst = acquireLane(first)
-        await laneFirst.mutex.acquire()
-        let laneSecond = acquireLane(second)
-        await laneSecond.mutex.acquire()
         do {
-            let value = try await body()
-            releaseLane(second)
-            laneSecond.mutex.release()
+            try await laneFirst.mutex.acquire()
+        } catch {
+            releaseLane(first)
+            throw error
+        }
+        if Task.isCancelled {
             releaseLane(first)
             laneFirst.mutex.release()
-            return value
+            throw CancellationError()
+        }
+
+        let laneSecond = acquireLane(second)
+        do {
+            try await laneSecond.mutex.acquire()
         } catch {
             releaseLane(second)
-            laneSecond.mutex.release()
             releaseLane(first)
             laneFirst.mutex.release()
             throw error
         }
+        if Task.isCancelled {
+            releaseLane(second)
+            laneSecond.mutex.release()
+            releaseLane(first)
+            laneFirst.mutex.release()
+            throw CancellationError()
+        }
+
+        defer {
+            releaseLane(second)
+            laneSecond.mutex.release()
+            releaseLane(first)
+            laneFirst.mutex.release()
+        }
+        return try await body()
     }
 
     // MARK: - Private
@@ -176,39 +202,66 @@ final class PerPathMutationLane: @unchecked Sendable {
 private final class AsyncMutex: @unchecked Sendable {
     private let lock = NSLock()
     private var available = true
-    private var waiters: [CheckedContinuation<Void, Never>] = []
+    private var waiters: [Waiter] = []
 
-    func acquire() async {
+    func acquire() async throws {
         // The availability check and the waiter registration happen
         // atomically under `lock`, inside the (synchronous) continuation
         // closure, so no `release()` can sneak in between and lose the
         // hand-off. Resuming immediately when available is safe: a
         // concurrent `release()` cannot run while there is no holder
         // (available == true means nothing is holding the mutex).
-        await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+        let waiter = Waiter()
+        try await withTaskCancellationHandler(operation: {
+            try await withCheckedThrowingContinuation {
+                (cont: CheckedContinuation<Void, Error>) in
+                lock.lock()
+                if Task.isCancelled {
+                    lock.unlock()
+                    cont.resume(throwing: CancellationError())
+                } else if available {
+                    available = false
+                    lock.unlock()
+                    cont.resume()
+                } else {
+                    waiter.continuation = cont
+                    waiters.append(waiter)
+                    lock.unlock()
+                }
+            }
+        }, onCancel: {
             lock.lock()
-            if available {
-                available = false
+            if let idx = waiters.firstIndex(where: { $0 === waiter }) {
+                waiters.remove(at: idx)
+                let cont = waiter.continuation
+                waiter.continuation = nil
                 lock.unlock()
-                cont.resume()
+                cont?.resume(throwing: CancellationError())
             } else {
-                waiters.append(cont)
                 lock.unlock()
             }
-        }
+        })
     }
 
     func release() {
         lock.lock()
         if let next = waiters.first {
             waiters.removeFirst()
+            let cont = next.continuation
+            next.continuation = nil
             lock.unlock()
             // Hand-off: the resumed waiter becomes the holder; the
             // mutex stays unavailable so a new acquirer queues behind.
-            next.resume()
+            cont?.resume()
         } else {
             available = true
             lock.unlock()
         }
     }
+}
+
+/// Holds the pending continuation for one `AsyncMutex` waiter.
+/// All accesses must be protected by the owning `AsyncMutex`'s lock.
+private final class Waiter: @unchecked Sendable {
+    var continuation: CheckedContinuation<Void, Error>?
 }

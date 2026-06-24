@@ -4,7 +4,7 @@
 #
 Pod::Spec.new do |s|
   s.name             = 'icloud_storage_plus'
-  s.version          = '2.1.3'
+  s.version          = '3.0.0'
   s.summary          = 'iCloud document storage for Flutter (iOS/macOS).'
   s.description      = <<-DESC
 Flutter plugin for uploading, downloading, and managing files in an iCloud
