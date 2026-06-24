@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [3.0.0] - 2026-06-24
+
+Major release for the app-owned preserve-both conflict model and the final
+MYT-1321 publish cutover.
+
+### Breaking
+- Removed the legacy native conflict auto-resolution contract completely.
+  `ConflictResolver`, write-path auto-resolve, and document-observer
+  auto-resolve no longer exist. The plugin never silently marks or deletes
+  losing `NSFileVersion`s.
+- Consumers must use the explicit version-exposure API
+  (`enumerateUnresolvedConflictVersions`, `copyConflictVersion`, and
+  `markConflictResolved`) to implement their own conflict policy.
+  The plugin exposes primitives only; apps own preserve-both copy-out and
+  resolution sequencing.
+- Removed compatibility shims and old readiness/conflict behavior from the
+  public Dart surface. This release has one forward contract rather than
+  dual old/new APIs.
+
+### Added
+- iOS and macOS expose unresolved `NSFileVersion` descriptors, caller-chosen
+  conflict-version copy-out, and explicit mark-resolved operations over the
+  Dart API.
+- Per-normalized-path mutation lanes serialize same-path mutations in FIFO
+  order while allowing different paths to proceed concurrently.
+- `AsyncMutex.acquire()` now removes a queued waiter immediately when the
+  waiting task is cancelled, preventing cancelled waiters from lingering in a
+  lane until normal FIFO hand-off reaches them.
+
+### Changed
+- iOS and macOS podspec versions now match the plugin `pubspec.yaml` version.
+  This reconciles the previous podspec `2.1.3` versus pubspec `2.2.0` drift
+  before publishing the new major.
+- `Package.swift` manifests remain source-list only, with no semantic version
+  field. The package source lists reference only files that are still present.
+
 ## [2.2.0] - 2026-05-26
 
 Corrective release for the readiness/error-reporting API introduced in
