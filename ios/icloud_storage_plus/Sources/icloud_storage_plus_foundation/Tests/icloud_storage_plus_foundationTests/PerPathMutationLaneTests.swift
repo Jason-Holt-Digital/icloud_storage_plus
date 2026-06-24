@@ -67,7 +67,10 @@ private func awaitTaskValue<T: Sendable>(
 ) async throws -> T {
     try await withThrowingTaskGroup(of: T.self) { group in
         group.addTask {
-            await task.value
+            await withTaskCancellationHandler(
+                operation: { await task.value },
+                onCancel: { task.cancel() }
+            )
         }
         group.addTask {
             try await Task.sleep(nanoseconds: timeoutNanoseconds)
