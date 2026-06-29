@@ -1,0 +1,221 @@
+.agents/skills/accessibility/SKILL.md
+  s_2f16e0e318343c::t_6883379a33cfa1 1-312
+.agents/skills/accessibility/references/audit-templates.md
+  s_2f16e0e318343c::t_8eafac7fe351d2 1-168
+.agents/skills/accessibility/references/examples.md
+  s_2f16e0e318343c::t_c9cfbacfa6ab70 1-799
+.agents/skills/accessibility/references/platforms/android.md
+  s_2f16e0e318343c::t_933b61afd2029f 1-96
+.agents/skills/accessibility/references/platforms/ios.md
+  s_2f16e0e318343c::t_bfa29d92e5c671 1-101
+.agents/skills/accessibility/references/platforms/linux.md
+  s_2f16e0e318343c::t_841e47b123761d 1-93
+.agents/skills/accessibility/references/platforms/macos.md
+  s_2f16e0e318343c::t_34e5e405cfed9a 1-76
+.agents/skills/accessibility/references/platforms/web.md
+  s_2f16e0e318343c::t_d4dbd4699764ee 1-108
+.agents/skills/accessibility/references/platforms/windows.md
+  s_2f16e0e318343c::t_76f5e92a419223 1-87
+.agents/skills/accessibility/references/testing.md
+  s_2f16e0e318343c::t_cba94d293a37d9 1-264
+.agents/skills/accessibility/references/widget-mapping.md
+  s_2f16e0e318343c::t_24d3648176c534 1-37
+.agents/skills/animations/SKILL.md
+  s_2f16e0e318343c::t_2496ea8117efe4 1-359
+.agents/skills/animations/references/explicit-animations.md
+  s_2f16e0e318343c::t_340b66a97d0cfc 1-141
+.agents/skills/animations/references/looping-animations.md
+  s_2f16e0e318343c::t_ccf7bae7dc442b 1-59
+.agents/skills/animations/references/page-transitions.md
+  s_2f16e0e318343c::t_9e1a8e1ed9fa71 1-109
+.agents/skills/animations/references/staggered-animations.md
+  s_2f16e0e318343c::t_617e1835db6dd5 1-173
+.agents/skills/bloc/SKILL.md
+  s_2f16e0e318343c::t_4d80c55051b767 1-218
+.agents/skills/bloc/references/architecture.md
+  s_2f16e0e318343c::t_457acfe9cff886 1-46
+.agents/skills/bloc/references/patterns.md
+  s_2f16e0e318343c::t_a3eff018da1bb7 1-67
+.agents/skills/bloc/references/testing.md
+  s_2f16e0e318343c::t_3069d227d73347 1-183
+.agents/skills/bloc/references/widgets.md
+  s_2f16e0e318343c::t_7a2b1c4a4c1438 1-91
+.agents/skills/brainstorm/SKILL.md
+  s_2f16e0e318343c::t_a7028c76f734ac 1-165
+.agents/skills/brainstorm/references/clear-context-handoff.md
+  s_2f16e0e318343c::t_da8c7440aab19d 1-18
+.agents/skills/brainstorm/references/template.md
+  s_2f16e0e318343c::t_d939bfa14701b5 1-23
+.agents/skills/build/SKILL.md
+  s_2f16e0e318343c::t_f2f7a17438cb48 1-176
+.agents/skills/build/references/pr-template.md
+  s_2f16e0e318343c::t_45f9287fde2cf6 1-13
+.agents/skills/build/references/review-agent-instructions.md
+  s_2f16e0e318343c::t_671f6eefb43689 1-16
+.agents/skills/build/references/review-consolidation.md
+  s_2f16e0e318343c::t_feae9404a3a25c 1-22
+.agents/skills/build/references/validate-and-fix.md
+  s_2f16e0e318343c::t_a7fdf66a406799 1-12
+.agents/skills/create-branch/SKILL.md
+  s_2f16e0e318343c::t_1021591dc553a8 1-108
+.agents/skills/create-branch/scripts/detect-base-branch.sh
+  s_2f16e0e318343c::t_12b8f91a95fd06 1-15
+.agents/skills/create-commit/SKILL.md
+  s_2f16e0e318343c::t_636c7477681611 1-133
+.agents/skills/create-commit/references/conventional-commits.md
+  s_2f16e0e318343c::t_cc0032231086fa 1-42
+.agents/skills/create-pr/SKILL.md
+  s_2f16e0e318343c::t_14519c1814210a 1-163
+.agents/skills/create-pr/references/ci-checks.md
+  s_2f16e0e318343c::t_771702c6d81579 1-42
+.agents/skills/create-pr/references/pr-cli.md
+  s_2f16e0e318343c::t_04267b85b324ec 1-34
+.agents/skills/create-pr/references/pull-request-template.md
+  s_2f16e0e318343c::t_4680f17acd5fd3 1-58
+.agents/skills/create-pr/references/push.md
+  s_2f16e0e318343c::t_3888c350855db9 1-18
+.agents/skills/create-project/SKILL.md
+  s_2f16e0e318343c::t_86b39567c15c9f 1-101
+.agents/skills/create/SKILL.md
+  s_2f16e0e318343c::t_1fd90d10486ec7 1-83
+.agents/skills/dart-flutter-sdk-upgrade/SKILL.md
+  s_2f16e0e318343c::t_d3c5ccf5689a8b 1-149
+.agents/skills/debrief/SKILL.md
+  s_2f16e0e318343c::t_95066c0bb19de9 1-156
+.agents/skills/debrief/references/template.md
+  s_2f16e0e318343c::t_367866d7292c50 1-69
+.agents/skills/elements-of-style/SKILL.md
+  s_2f16e0e318343c::t_821f3486b15fd4 1-89
+.agents/skills/hotfix/SKILL.md
+  s_2f16e0e318343c::t_b58feeb4489ee9 1-162
+.agents/skills/hotfix/references/pr-template.md
+  s_2f16e0e318343c::t_5b92503fe7f7cd 1-20
+.agents/skills/hotfix/references/review-agent-instructions.md
+  s_2f16e0e318343c::t_c30dbfd4bbc805 1-16
+.agents/skills/hotfix/references/review-consolidation.md
+  s_2f16e0e318343c::t_666379f3fdbb6e 1-22
+.agents/skills/hotfix/references/validate-and-fix.md
+  s_2f16e0e318343c::t_32b95fc3d1d82f 1-12
+.agents/skills/internationalization/SKILL.md
+  s_2f16e0e318343c::t_18eed23df98c23 1-156
+.agents/skills/internationalization/references/backend.md
+  s_2f16e0e318343c::t_695bb2ab71a166 1-28
+.agents/skills/internationalization/references/directionality.md
+  s_2f16e0e318343c::t_5294b201b55e02 1-57
+.agents/skills/internationalization/references/setup.md
+  s_2f16e0e318343c::t_3d2186928489dc 1-139
+.agents/skills/layered-architecture/SKILL.md
+  s_2f16e0e318343c::t_480e502b033211 1-403
+.agents/skills/layered-architecture/references/data-flow.md
+  s_2f16e0e318343c::t_786c150f3eb08c 1-88
+.agents/skills/layered-architecture/references/model-transformation.md
+  s_2f16e0e318343c::t_b8b59dbdf4e241 1-137
+.agents/skills/layered-architecture/references/pubspec.md
+  s_2f16e0e318343c::t_2b701d60a7c99b 1-104
+.agents/skills/layered-architecture/references/testing.md
+  s_2f16e0e318343c::t_230444c191cb1c 1-174
+.agents/skills/layered-architecture/references/worked-example.md
+  s_2f16e0e318343c::t_2bd069ccce000a 1-516
+.agents/skills/license-compliance/SKILL.md
+  s_2f16e0e318343c::t_6e696dd5bc1df1 1-82
+.agents/skills/material-theming/SKILL.md
+  s_2f16e0e318343c::t_53c364dfdb9e33 1-175
+.agents/skills/material-theming/references/components.md
+  s_2f16e0e318343c::t_86861aad6355ff 1-117
+.agents/skills/material-theming/references/spacing.md
+  s_2f16e0e318343c::t_e9da799739dd20 1-72
+.agents/skills/material-theming/references/typography.md
+  s_2f16e0e318343c::t_8167b462759af9 1-99
+.agents/skills/navigation/SKILL.md
+  s_2f16e0e318343c::t_8783d217d80637 1-223
+.agents/skills/navigation/references/parameters.md
+  s_2f16e0e318343c::t_93f69d64a5a35c 1-60
+.agents/skills/navigation/references/redirects.md
+  s_2f16e0e318343c::t_fa61c8e4391a8d 1-52
+.agents/skills/navigation/references/testing.md
+  s_2f16e0e318343c::t_da68a6a341be3b 1-58
+.agents/skills/plan-technical-review/SKILL.md
+  s_2f16e0e318343c::t_317c3a26e6f6aa 1-51
+.agents/skills/plan-technical-review/references/clear-context-handoff.md
+  s_2f16e0e318343c::t_b25c601c2b5e0c 1-18
+.agents/skills/plan-technical-review/references/extensive.md
+  s_2f16e0e318343c::t_e3a8d229326b2a 1-111
+.agents/skills/plan-technical-review/references/minimal.md
+  s_2f16e0e318343c::t_2c3498f2ecb258 1-27
+.agents/skills/plan-technical-review/references/standard.md
+  s_2f16e0e318343c::t_00b4240ac25a78 1-45
+.agents/skills/plan/SKILL.md
+  s_2f16e0e318343c::t_fbd02ee7d35535 1-195
+.agents/skills/plan/references/clear-context-handoff.md
+  s_2f16e0e318343c::t_6f3ff05f121451 1-18
+.agents/skills/plan/references/extensive.md
+  s_2f16e0e318343c::t_40c773bdcd8bf6 1-111
+.agents/skills/plan/references/minimal.md
+  s_2f16e0e318343c::t_c619c84b705cef 1-27
+.agents/skills/plan/references/standard.md
+  s_2f16e0e318343c::t_d34fa815e070f8 1-45
+.agents/skills/rebase/SKILL.md
+  s_2f16e0e318343c::t_d9e39d5b5c54a7 1-104
+.agents/skills/rebase/scripts/detect-base-branch.sh
+  s_2f16e0e318343c::t_47353971d003d5 1-15
+.agents/skills/refine-approach/SKILL.md
+  s_2f16e0e318343c::t_fe8927e195011e 1-112
+.agents/skills/refine-approach/references/clear-context-handoff.md
+  s_2f16e0e318343c::t_0f49ef17c1defc 1-18
+.agents/skills/static-security/SKILL.md
+  s_2f16e0e318343c::t_bb2b4335e53167 1-229
+.agents/skills/static-security/references/binary-protection.md
+  s_2f16e0e318343c::t_b0b5b69b93eeb5 1-29
+.agents/skills/static-security/references/crypto.md
+  s_2f16e0e318343c::t_42fb80cc3e5294 1-48
+.agents/skills/static-security/references/packages.md
+  s_2f16e0e318343c::t_d69b7caa9014e1 1-22
+.agents/skills/static-security/references/supply-chain.md
+  s_2f16e0e318343c::t_e609170b7cc513 1-63
+.agents/skills/testing/SKILL.md
+  s_2f16e0e318343c::t_95fc3ef7aabb44 1-478
+.agents/skills/testing/references/animation-testing.md
+  s_2f16e0e318343c::t_2018eae742553a 1-214
+.agents/skills/testing/references/configuration.md
+  s_2f16e0e318343c::t_7a3a0888afbfd2 1-85
+.agents/skills/testing/references/coverage.md
+  s_2f16e0e318343c::t_8801a3e319378a 1-68
+.agents/skills/testing/references/golden-tests.md
+  s_2f16e0e318343c::t_cd3f94e8140eb6 1-95
+.agents/skills/testing/references/matchers.md
+  s_2f16e0e318343c::t_b1b1b4a6deb813 1-24
+.agents/skills/testing/references/widget-tests.md
+  s_2f16e0e318343c::t_93a617b61761a9 1-100
+.agents/skills/ui-package/SKILL.md
+  s_2f16e0e318343c::t_1a45a0bcf75964 1-85
+.agents/skills/ui-package/reference.md
+  s_2f16e0e318343c::t_0870c891f11050 1-86
+.agents/skills/very-good-analysis-upgrade/SKILL.md
+  s_2f16e0e318343c::t_41051def3f2897 1-166
+.agents/skills/very-good-analysis-upgrade/reference.md
+  s_2f16e0e318343c::t_3c1130fd11c109 1-16
+.agents/skills/vgv-review/SKILL.md
+  s_2f16e0e318343c::t_1ed77852a847dd 1-119
+.agents/skills/vgv-review/references/review-consolidation.md
+  s_2f16e0e318343c::t_ede2c4f902ed77 1-22
+.agents/skills/vgv-review/scripts/detect-review-scope.sh
+  s_2f16e0e318343c::t_3519d8daf51e97 1-44
+.factory/settings.json
+  s_2f16e0e318343c::t_768688fa57b9f1 1-6
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.3",
+  "base_commit_sha": "bf1e9c64a84b5c73f2118daf2ba966a44027d265",
+  "prompts": {},
+  "sessions": {
+    "s_2f16e0e318343c": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f1210-c2ff-7ab2-af9f-692b82c013b5",
+        "model": "gpt-5.5"
+      },
+      "human_author": "Jason Holt <jason@jasonholtdigital.com>"
+    }
+  }
+}
