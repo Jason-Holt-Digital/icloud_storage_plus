@@ -1,0 +1,6 @@
+{
+  "enabledPlugins": {
+    "vgv-wingspan@vgv-factory-plugins": true,
+    "vgv-ai-flutter-plugin@vgv-factory-plugins": true
+  }
+}
