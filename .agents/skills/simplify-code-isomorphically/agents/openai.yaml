@@ -1,0 +1,9 @@
+interface:
+  display_name: "Simplify Code Isomorphically"
+  short_description: "Behavior-safe code refactoring"
+  icon_small: "./assets/refactor-pencil-small.svg"
+  icon_large: "./assets/refactor-pencil.png"
+  brand_color: "#FFCF4A"
+  default_prompt: "Use $simplify-code-isomorphically to refactor this code without changing behavior."
+policy:
+  allow_implicit_invocation: true
