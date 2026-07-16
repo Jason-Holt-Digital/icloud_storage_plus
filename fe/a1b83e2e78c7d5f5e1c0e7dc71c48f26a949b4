@@ -1,0 +1,45 @@
+.agents/skills/simplify-code-isomorphically/SKILL.md
+  s_21898373643195::t_efa2aca3ed05e0 1-222
+.agents/skills/simplify-code-isomorphically/agents/openai.yaml
+  s_21898373643195::t_8c7601892320aa 1-9
+.agents/skills/simplify-code-isomorphically/assets/refactor-pencil-small.svg
+  s_21898373643195::t_923a0aecfaee14 1-3
+.agents/skills/simplify-code-isomorphically/references/de-effect.md
+  s_21898373643195::t_7d18a8f97f07d5 1-168
+.agents/skills/simplify-code-isomorphically/references/de-layer.md
+  s_21898373643195::t_0b0a479eca160b 1-116
+.agents/skills/simplify-code-isomorphically/references/de-prop.md
+  s_21898373643195::t_989a0a50161e71 1-404
+.agents/skills/simplify-code-isomorphically/references/de-render.md
+  s_21898373643195::t_9493ba44e6c10b 1-118
+.agents/skills/simplify-code-isomorphically/references/de-repeat.md
+  s_21898373643195::t_fdd00b89d31441 1-372
+.agents/skills/simplify-code-isomorphically/references/de-selector.md
+  s_21898373643195::t_be5b912e24b064 1-124
+.agents/skills/simplify-code-isomorphically/references/de-slop-and-de-smell.md
+  s_21898373643195::t_f68b87e92187d6 1-347
+.agents/skills/simplify-code-isomorphically/references/de-state.md
+  s_21898373643195::t_9092e73a6061cc 1-120
+.agents/skills/simplify-code-isomorphically/references/de-type.md
+  s_21898373643195::t_137d1d25464830 1-132
+.agents/skills/simplify-code-isomorphically/references/guidance-examples.md
+  s_21898373643195::t_cf2f7841ce5343 1-455
+.agents/skills/simplify-code-isomorphically/scripts/smell_scan.py
+  s_21898373643195::t_48ee7f99a51942 1-452
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "fea1b83e2e78c7d5f5e1c0e7dc71c48f26a949b4",
+  "prompts": {},
+  "sessions": {
+    "s_21898373643195": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f4c72-0f0f-7f92-818d-a03bb95323cb",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Jason Holt <jason@jasonholtdigital.com>"
+    }
+  }
+}
