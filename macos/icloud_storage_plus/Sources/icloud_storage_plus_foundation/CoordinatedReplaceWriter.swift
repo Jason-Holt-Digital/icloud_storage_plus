@@ -124,9 +124,11 @@ extension CoordinatedReplaceWriter {
     }
 
     /// Bridges synchronous file coordination into the async caller.
-    /// Presenter-owned writes run on the presenter's operation queue so
-    /// Foundation suppresses self-notifications. Unobserved writes use a
-    /// dispatch thread and retain the existing cooperative-pool behavior.
+    /// Coordination always runs on a background dispatch queue so a slow
+    /// iCloud/File Provider write never blocks the presenter's operation
+    /// queue (or the main thread). Passing the presenter to
+    /// `NSFileCoordinator` still suppresses self-notifications for
+    /// presenter-owned writes.
     static func makeLiveCoordinateReplace(
         filePresenter: NSFilePresenter?
     ) -> CoordinateReplace {
@@ -166,15 +168,9 @@ extension CoordinatedReplaceWriter {
                     continuation.resume()
                 }
 
-                if let filePresenter = presenterReference.value {
-                    filePresenter.presentedItemOperationQueue.addOperation(
-                        coordinate
-                    )
-                } else {
-                    DispatchQueue.global(qos: .userInitiated).async(
-                        execute: coordinate
-                    )
-                }
+                DispatchQueue.global(qos: .userInitiated).async(
+                    execute: coordinate
+                )
             }
         }
     }

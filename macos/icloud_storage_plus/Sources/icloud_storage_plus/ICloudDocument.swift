@@ -209,46 +209,55 @@ class ICloudDocument: NSDocument {
         guard let observation = state.observation,
               let fileURL else { return }
 
-        let coordinator = NSFileCoordinator(filePresenter: self)
-        var coordinationError: NSError?
-        coordinator.coordinate(
-            readingItemAt: fileURL,
-            options: [],
-            error: &coordinationError
-        ) { coordinatedURL in
-            if let conflictVersions =
-                NSFileVersion.unresolvedConflictVersionsOfItem(
+        // Coordinate off the presenter's operation queue: a slow iCloud/File
+        // Provider read must not block subsequent presenter callbacks or the
+        // main thread. The coordinator still uses `self` as presenter to
+        // suppress self-notifications.
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self else { return }
+            let coordinator = NSFileCoordinator(filePresenter: self)
+            var coordinationError: NSError?
+            coordinator.coordinate(
+                readingItemAt: fileURL,
+                options: [],
+                error: &coordinationError
+            ) { coordinatedURL in
+                if let conflictVersions =
+                    NSFileVersion.unresolvedConflictVersionsOfItem(
+                        at: coordinatedURL
+                    ),
+                    !conflictVersions.isEmpty {
+                    observation.emit(kind: .conflict)
+                    // Conflict policy is app-owned. The plugin only surfaces
+                    // the conflict; it never auto-resolves-and-deletes losing
+                    // `NSFileVersion`s. The app enumerates, copies out, and
+                    // marks resolved via the dedicated version-exposure
+                    // primitives.
+                    DebugHelper.log(
+                        "Document in conflict: "
+                            + coordinatedURL.lastPathComponent
+                    )
+                    return
+                }
+
+                guard let modificationDate = try? self.contentModificationDate(
                     at: coordinatedURL
-                ),
-                !conflictVersions.isEmpty {
-                observation.emit(kind: .conflict)
-                // Conflict policy is app-owned. The plugin only surfaces the
-                // conflict; it never auto-resolves-and-deletes losing
-                // `NSFileVersion`s. The app enumerates, copies out, and marks
-                // resolved via the dedicated version-exposure primitives.
+                ), observation.consumeContentChange(
+                    modificationDate: modificationDate
+                ) else {
+                    return
+                }
+
+                observation.emit(kind: .invalidation)
+            }
+
+            if let coordinationError {
                 DebugHelper.log(
-                    "Document in conflict: \(coordinatedURL.lastPathComponent)"
+                    "Document change coordination failed: "
+                        + coordinationError.localizedDescription
                 )
-                return
+                observation.emit(kind: .invalidation)
             }
-
-            guard let modificationDate = try? contentModificationDate(
-                at: coordinatedURL
-            ), observation.consumeContentChange(
-                modificationDate: modificationDate
-            ) else {
-                return
-            }
-
-            observation.emit(kind: .invalidation)
-        }
-
-        if let coordinationError {
-            DebugHelper.log(
-                "Document change coordination failed: "
-                    + coordinationError.localizedDescription
-            )
-            observation.emit(kind: .invalidation)
         }
     }
 
