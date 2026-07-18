@@ -13,15 +13,11 @@ let package = Package(
         // If the plugin name contains "_", replace with "-" for the library name.
         .library(name: "icloud-storage-plus", targets: ["icloud_storage_plus"]),
     ],
-    dependencies: [
-        .package(name: "FlutterFramework", path: "../FlutterFramework"),
-    ],
+    dependencies: [],
     targets: [
         .target(
             name: "icloud_storage_plus",
-            dependencies: [
-                .product(name: "FlutterFramework", package: "FlutterFramework"),
-            ],
+            dependencies: [],
             path: "Sources",
             exclude: [
                 "icloud_storage_plus_foundation/Package.swift",
