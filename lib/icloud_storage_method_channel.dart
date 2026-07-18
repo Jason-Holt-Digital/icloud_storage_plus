@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:math';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:icloud_storage_plus/icloud_storage_platform_interface.dart';
@@ -8,14 +7,18 @@ import 'package:icloud_storage_plus/models/exceptions.dart';
 import 'package:icloud_storage_plus/models/gather_result.dart';
 import 'package:icloud_storage_plus/models/icloud_document_change.dart';
 import 'package:icloud_storage_plus/models/icloud_file.dart';
+import 'package:icloud_storage_plus/models/icloud_item_metadata.dart';
 import 'package:icloud_storage_plus/models/icloud_version.dart';
 import 'package:icloud_storage_plus/models/transfer_progress.dart';
+import 'package:icloud_storage_plus/src/platform_exception_decoder.dart';
 import 'package:logging/logging.dart';
 
 /// An implementation of [ICloudStoragePlatform] that uses method channels.
 class MethodChannelICloudStorage extends ICloudStoragePlatform {
   static final Logger _logger = Logger('ICloudStorage');
-  static final Random _random = Random();
+  static final int _eventChannelSessionId =
+      DateTime.now().microsecondsSinceEpoch;
+  static int _nextEventChannelId = 0;
 
   /// The method channel used to interact with the native platform.
   @visibleForTesting
@@ -23,8 +26,7 @@ class MethodChannelICloudStorage extends ICloudStoragePlatform {
 
   @override
   Future<bool> icloudAvailable() async {
-    final result = await methodChannel.invokeMethod<bool>('icloudAvailable');
-    return result ?? false;
+    return _invokeRequiredMethod<bool>('icloudAvailable');
   }
 
   @override
@@ -37,18 +39,26 @@ class MethodChannelICloudStorage extends ICloudStoragePlatform {
         : _generateEventChannelName('gather', containerId);
 
     if (onUpdate != null) {
-      await _invokeMethod<void>(
+      await _invokeVoidMethod(
         'createEventChannel',
         {'eventChannelName': eventChannelName},
       );
 
       final gatherEventChannel = EventChannel(eventChannelName);
-      final stream = gatherEventChannel
-          .receiveBroadcastStream()
-          .where((event) => event is List)
-          .map<GatherResult>((event) {
-        return _mapFilesFromDynamicList(event as List);
-      });
+      final stream = _receiveMappedEventStream<GatherResult>(
+        eventChannel: gatherEventChannel,
+        operation: 'gather',
+        mapEvent: (event) {
+          if (event is! List) {
+            throw _channelContractError(
+              operation: 'gather',
+              message: 'Unexpected gather event type: ${event.runtimeType}',
+              underlying: event,
+            );
+          }
+          return _mapFilesFromDynamicList(event, operation: 'gather');
+        },
+      );
 
       onUpdate(stream);
     }
@@ -58,7 +68,7 @@ class MethodChannelICloudStorage extends ICloudStoragePlatform {
       'eventChannelName': eventChannelName,
     });
 
-    return _mapFilesFromDynamicList(mapList);
+    return _mapFilesFromDynamicList(mapList, operation: 'gather');
   }
 
   @override
@@ -73,27 +83,17 @@ class MethodChannelICloudStorage extends ICloudStoragePlatform {
       relativePath,
     );
 
-    await _invokeMethod<void>(
+    await _invokeVoidMethod(
       'createEventChannel',
       {'eventChannelName': eventChannelName},
     );
 
     final eventChannel = EventChannel(eventChannelName);
-    final eventStream = eventChannel
-        .receiveBroadcastStream()
-        .map<ICloudDocumentChange>(_mapDocumentChangeEvent)
-        .handleError((Object error, StackTrace stackTrace) {
-      // PlatformExceptions from _mapDocumentChangeEvent (malformed payload,
-      // code: invalidEvent) have no structured 'category' in their details
-      // and are returned unchanged by _mapStructuredPlatformException.
-      // Native-originated PlatformExceptions carry a structured category and
-      // are mapped to typed ICloudOperationException values. Non-Platform-
-      // Exception errors are re-thrown with their original stack trace.
-      if (error is PlatformException) {
-        throw _mapStructuredPlatformException(error);
-      }
-      Error.throwWithStackTrace(error, stackTrace);
-    });
+    final eventStream = _receiveMappedEventStream<ICloudDocumentChange>(
+      eventChannel: eventChannel,
+      operation: 'watchDocumentChanges',
+      mapEvent: _mapDocumentChangeEvent,
+    );
 
     StreamSubscription<ICloudDocumentChange>? subscription;
     late final StreamController<ICloudDocumentChange> controller;
@@ -113,13 +113,13 @@ class MethodChannelICloudStorage extends ICloudStoragePlatform {
     onChange(controller.stream);
 
     try {
-      await _invokeMethod<void>('watchDocumentChanges', {
+      await _invokeVoidMethod('watchDocumentChanges', {
         'containerId': containerId,
         'relativePath': relativePath,
         'eventChannelName': eventChannelName,
       });
     } on PlatformException catch (error, stackTrace) {
-      final mapped = _mapStructuredPlatformException(error);
+      final mapped = decodePlatformException(error);
       controller.addError(mapped, stackTrace);
       unawaited(controller.close());
       Error.throwWithStackTrace(mapped, stackTrace);
@@ -132,18 +132,17 @@ class MethodChannelICloudStorage extends ICloudStoragePlatform {
 
   ICloudDocumentChange _mapDocumentChangeEvent(Object? event) {
     if (event is! Map) {
-      throw PlatformException(
-        code: PlatformExceptionCode.invalidEvent,
-        message: 'Unexpected document change event type: '
-            '${event.runtimeType}',
-        details: event,
+      throw _channelContractError(
+        operation: 'watchDocumentChanges',
+        message: 'Unexpected document change event type: ${event.runtimeType}',
+        underlying: event,
       );
     }
     if (event['relativePath'] is! String || event['kind'] is! String) {
-      throw PlatformException(
-        code: PlatformExceptionCode.invalidEvent,
+      throw _channelContractError(
+        operation: 'watchDocumentChanges',
         message: 'Malformed document change event payload',
-        details: event,
+        underlying: event,
       );
     }
     return ICloudDocumentChange.fromMap(event);
@@ -162,7 +161,7 @@ class MethodChannelICloudStorage extends ICloudStoragePlatform {
   Future<void> uploadFile({
     required String containerId,
     required String localPath,
-    required String cloudRelativePath,
+    required String relativePath,
     StreamHandler<ICloudTransferProgress>? onProgress,
   }) async {
     var eventChannelName = '';
@@ -170,7 +169,7 @@ class MethodChannelICloudStorage extends ICloudStoragePlatform {
     if (onProgress != null) {
       eventChannelName = _generateEventChannelName('uploadFile', containerId);
 
-      await _invokeMethod<void>(
+      await _invokeVoidMethod(
         'createEventChannel',
         {'eventChannelName': eventChannelName},
       );
@@ -181,10 +180,10 @@ class MethodChannelICloudStorage extends ICloudStoragePlatform {
       onProgress(stream);
     }
 
-    await _invokeMethod<void>('uploadFile', {
+    await _invokeVoidMethod('uploadFile', {
       'containerId': containerId,
       'localFilePath': localPath,
-      'cloudRelativePath': cloudRelativePath,
+      'relativePath': relativePath,
       'eventChannelName': eventChannelName,
     });
   }
@@ -192,7 +191,7 @@ class MethodChannelICloudStorage extends ICloudStoragePlatform {
   @override
   Future<void> downloadFile({
     required String containerId,
-    required String cloudRelativePath,
+    required String relativePath,
     required String localPath,
     StreamHandler<ICloudTransferProgress>? onProgress,
   }) async {
@@ -201,7 +200,7 @@ class MethodChannelICloudStorage extends ICloudStoragePlatform {
     if (onProgress != null) {
       eventChannelName = _generateEventChannelName('downloadFile', containerId);
 
-      await _invokeMethod<void>(
+      await _invokeVoidMethod(
         'createEventChannel',
         {'eventChannelName': eventChannelName},
       );
@@ -212,42 +211,40 @@ class MethodChannelICloudStorage extends ICloudStoragePlatform {
       onProgress(stream);
     }
 
-    await _invokeMethod<void>('downloadFile', {
+    await _invokeVoidMethod('downloadFile', {
       'containerId': containerId,
-      'cloudRelativePath': cloudRelativePath,
+      'relativePath': relativePath,
       'localFilePath': localPath,
       'eventChannelName': eventChannelName,
     });
   }
 
   @override
-  Future<String?> readInPlace({
+  Future<String> readInPlace({
     required String containerId,
     required String relativePath,
   }) async {
-    final result = await _invokeMethod<String>(
+    return _invokeRequiredMethod<String>(
       'readInPlace',
       {
         'containerId': containerId,
         'relativePath': relativePath,
       },
     );
-    return result;
   }
 
   @override
-  Future<Uint8List?> readInPlaceBytes({
+  Future<Uint8List> readInPlaceBytes({
     required String containerId,
     required String relativePath,
   }) async {
-    final result = await _invokeMethod<Uint8List>(
+    return _invokeRequiredMethod<Uint8List>(
       'readInPlaceBytes',
       {
         'containerId': containerId,
         'relativePath': relativePath,
       },
     );
-    return result;
   }
 
   @override
@@ -256,7 +253,7 @@ class MethodChannelICloudStorage extends ICloudStoragePlatform {
     required String relativePath,
     required String contents,
   }) async {
-    await _invokeMethod<void>('writeInPlace', {
+    await _invokeVoidMethod('writeInPlace', {
       'containerId': containerId,
       'relativePath': relativePath,
       'contents': contents,
@@ -269,7 +266,7 @@ class MethodChannelICloudStorage extends ICloudStoragePlatform {
     required String relativePath,
     required Uint8List contents,
   }) async {
-    await _invokeMethod<void>('writeInPlaceBytes', {
+    await _invokeVoidMethod('writeInPlaceBytes', {
       'containerId': containerId,
       'relativePath': relativePath,
       'contents': contents,
@@ -281,7 +278,7 @@ class MethodChannelICloudStorage extends ICloudStoragePlatform {
     required String containerId,
     required String relativePath,
   }) async {
-    await _invokeMethod<void>('delete', {
+    await _invokeVoidMethod('delete', {
       'containerId': containerId,
       'relativePath': relativePath,
     });
@@ -293,7 +290,7 @@ class MethodChannelICloudStorage extends ICloudStoragePlatform {
     required String fromRelativePath,
     required String toRelativePath,
   }) async {
-    await _invokeMethod<void>('move', {
+    await _invokeVoidMethod('move', {
       'containerId': containerId,
       'atRelativePath': fromRelativePath,
       'toRelativePath': toRelativePath,
@@ -306,7 +303,7 @@ class MethodChannelICloudStorage extends ICloudStoragePlatform {
     required String fromRelativePath,
     required String toRelativePath,
   }) async {
-    await _invokeMethod<void>('copy', {
+    await _invokeVoidMethod('copy', {
       'containerId': containerId,
       'fromRelativePath': fromRelativePath,
       'toRelativePath': toRelativePath,
@@ -326,112 +323,59 @@ class MethodChannelICloudStorage extends ICloudStoragePlatform {
   }
 
   @override
-  Future<Map<String, dynamic>?> getDocumentMetadata({
+  Future<ICloudItemMetadata?> getItemMetadata({
     required String containerId,
     required String relativePath,
   }) async {
-    return _invokeMetadataMethodRaw(
-      'getDocumentMetadata',
-      containerId: containerId,
-      relativePath: relativePath,
+    const method = 'getItemMetadata';
+    final result = await _invokeMethod<Object?>(
+      method,
+      {
+        'containerId': containerId,
+        'relativePath': relativePath,
+      },
     );
-  }
-
-  @override
-  Future<Map<String, dynamic>?> getItemMetadata({
-    required String containerId,
-    required String relativePath,
-  }) async {
+    if (result == null) return null;
+    if (result is! Map) {
+      throw _unexpectedTypeError(method, 'Map or null', result);
+    }
     try {
-      return await _invokeNormalizedMetadataMethod(
-        'getItemMetadata',
-        containerId: containerId,
-        relativePath: relativePath,
-      );
-    } on MissingPluginException {
-      return _invokeNormalizedMetadataMethod(
-        'getDocumentMetadata',
-        containerId: containerId,
-        relativePath: relativePath,
-      );
+      _validateICloudFilePayload(result);
+      return ICloudItemMetadata.fromMap(result);
+    } on Object catch (error) {
+      throw _malformedPayloadError(method, error, result);
     }
-  }
-
-  Future<Map<String, dynamic>?> _invokeNormalizedMetadataMethod(
-    String method, {
-    required String containerId,
-    required String relativePath,
-  }) async {
-    final metadata = await _invokeMetadataMethod(
-      method,
-      containerId: containerId,
-      relativePath: relativePath,
-    );
-    if (metadata == null) return null;
-    return _normalizeMetadataMap(metadata);
-  }
-
-  Future<Map<String, dynamic>?> _invokeMetadataMethod(
-    String method, {
-    required String containerId,
-    required String relativePath,
-  }) async {
-    final result = await _invokeMethod<Map<dynamic, dynamic>?>(
-      method,
-      {
-        'containerId': containerId,
-        'relativePath': relativePath,
-      },
-    );
-
-    if (result == null) return null;
-
-    return result.map((key, value) => MapEntry(key.toString(), value));
-  }
-
-  Future<Map<String, dynamic>?> _invokeMetadataMethodRaw(
-    String method, {
-    required String containerId,
-    required String relativePath,
-  }) async {
-    final result = await methodChannel.invokeMethod<Map<dynamic, dynamic>?>(
-      method,
-      {
-        'containerId': containerId,
-        'relativePath': relativePath,
-      },
-    );
-
-    if (result == null) return null;
-
-    return result.map((key, value) => MapEntry(key.toString(), value));
-  }
-
-  Map<String, dynamic> _normalizeMetadataMap(Map<String, dynamic> metadata) {
-    final normalized = Map<String, dynamic>.from(metadata);
-    final downloadStatus = normalized['downloadStatus'];
-    if (downloadStatus is String) {
-      normalized['downloadStatus'] = switch (downloadStatus) {
-        'NSMetadataUbiquitousItemDownloadingStatusNotDownloaded' ||
-        'NSURLUbiquitousItemDownloadingStatusNotDownloaded' =>
-          'notDownloaded',
-        'NSMetadataUbiquitousItemDownloadingStatusDownloaded' ||
-        'NSURLUbiquitousItemDownloadingStatusDownloaded' =>
-          'downloaded',
-        'NSMetadataUbiquitousItemDownloadingStatusCurrent' ||
-        'NSURLUbiquitousItemDownloadingStatusCurrent' =>
-          'current',
-        _ => downloadStatus,
-      };
-    }
-    return normalized;
   }
 
   Future<T?> _invokeMethod<T>(String method, [Object? arguments]) async {
     try {
-      return await methodChannel.invokeMethod<T>(method, arguments);
+      final result =
+          await methodChannel.invokeMethod<Object?>(method, arguments);
+      if (result == null || result is T) return result as T?;
+      throw _unexpectedTypeError(method, _typeName<T>(), result);
+    } on MissingPluginException catch (error) {
+      throw _missingPluginError(method, error);
     } on PlatformException catch (error) {
-      throw _mapStructuredPlatformException(error);
+      throw decodePlatformException(error);
+    }
+  }
+
+  Future<T> _invokeRequiredMethod<T>(
+    String method, [
+    Object? arguments,
+  ]) async {
+    final result = await _invokeMethod<T>(method, arguments);
+    if (result != null) return result;
+    throw _unexpectedTypeError(method, _typeName<T>(), null);
+  }
+
+  Future<void> _invokeVoidMethod(
+    String method, [
+    Object? arguments,
+  ]) async {
+    final result = await _invokeMethod<Object?>(method, arguments);
+    if (result != null) {
+      throw _unexpectedTypeError(method, 'null', result);
     }
   }
 
@@ -439,21 +383,103 @@ class MethodChannelICloudStorage extends ICloudStoragePlatform {
     String method, [
     Object? arguments,
   ]) async {
-    try {
-      return await methodChannel.invokeListMethod<T>(method, arguments);
-    } on PlatformException catch (error) {
-      throw _mapStructuredPlatformException(error);
+    final result = await _invokeMethod<Object?>(method, arguments);
+    if (result == null) return null;
+    if (result is! List) {
+      throw _unexpectedTypeError(method, 'List or null', result);
     }
+    final values = <T>[];
+    for (var index = 0; index < result.length; index++) {
+      final value = result[index];
+      if (value is! T) {
+        throw _channelContractError(
+          operation: method,
+          message: 'Expected ${_typeName<T>()} at index $index, '
+              'got ${value.runtimeType}',
+          underlying: value,
+        );
+      }
+      values.add(value);
+    }
+    return values;
   }
 
-  Exception _mapStructuredPlatformException(PlatformException error) {
-    final details = error.details;
-    final category = details is Map ? details['category'] : null;
-    if (category is! String) {
-      return error;
-    }
+  ICloudOperationException _missingPluginError(
+    String operation,
+    MissingPluginException error,
+  ) =>
+      _channelContractError(
+        operation: operation,
+        message: 'Missing native plugin implementation for $operation',
+        underlying: error,
+      );
 
-    return mapICloudPlatformException(error);
+  ICloudOperationException _unexpectedTypeError(
+    String operation,
+    String expected,
+    Object? actual,
+  ) =>
+      _channelContractError(
+        operation: operation,
+        message: 'Expected $expected, got ${actual.runtimeType}',
+        underlying: actual,
+      );
+
+  ICloudOperationException _malformedPayloadError(
+    String operation,
+    Object error,
+    Object? payload,
+  ) =>
+      _channelContractError(
+        operation: operation,
+        message: 'Malformed $operation payload: $error',
+        underlying: payload,
+      );
+
+  String _typeName<T>() => T.toString();
+
+  ICloudOperationException _channelContractError({
+    required String operation,
+    required String message,
+    Object? underlying,
+  }) {
+    return ICloudOperationException.pluginContract(
+      operation: operation,
+      message: message,
+      underlying: underlying,
+    );
+  }
+
+  Stream<T> _receiveMappedEventStream<T>({
+    required EventChannel eventChannel,
+    required String operation,
+    required T Function(Object? event) mapEvent,
+  }) {
+    return eventChannel.receiveBroadcastStream().transform(
+          StreamTransformer<Object?, T>.fromHandlers(
+            handleData: (event, sink) {
+              try {
+                sink.add(mapEvent(event));
+              } on Object catch (error, stackTrace) {
+                sink.addError(error, stackTrace);
+              }
+            },
+            handleError: (error, stackTrace, sink) {
+              if (error is PlatformException) {
+                sink.addError(decodePlatformException(error), stackTrace);
+              } else {
+                sink.addError(
+                  _channelContractError(
+                    operation: operation,
+                    message: 'Unexpected event channel error',
+                    underlying: error,
+                  ),
+                  stackTrace,
+                );
+              }
+            },
+          ),
+        );
   }
 
   /// Creates a progress stream backed by the native event channel.
@@ -462,11 +488,8 @@ class MethodChannelICloudStorage extends ICloudStoragePlatform {
   /// listen immediately in the `onProgress` callback to avoid missing early
   /// progress events.
   ///
-  /// **Note on Error Handling:**
-  /// This stream does **not** emit Dart errors via `onError`. Failures are
-  /// delivered as data events with `type == ICloudTransferProgressType.error`.
-  /// You must check `event.isError` (or `event.type`) inside the data listener
-  /// to handle failures. See [ICloudTransferProgress] for details.
+  /// Failures are emitted through the stream error channel as typed
+  /// [ICloudOperationException] values.
   Stream<ICloudTransferProgress> _receiveTransferProgressStream(
     EventChannel eventChannel,
   ) {
@@ -478,36 +501,36 @@ class MethodChannelICloudStorage extends ICloudStoragePlatform {
           return;
         }
 
-        final exception = PlatformException(
-          code: PlatformExceptionCode.invalidEvent,
-          message: 'Unexpected progress event type: ${event.runtimeType}',
-          details: event,
-        );
         sink
-          ..add(ICloudTransferProgress.error(exception))
+          ..addError(
+            _channelContractError(
+              operation: 'transferProgress',
+              message: 'Unexpected progress event type: ${event.runtimeType}',
+              underlying: event,
+            ),
+          )
           ..close();
       },
       handleError: (error, stackTrace, sink) {
-        final exception = error is PlatformException
-            ? error
-            : () {
-                _logger.severe(
-                  'Unexpected progress stream error',
-                  error,
-                  stackTrace,
-                );
-                return PlatformException(
-                  code: PlatformExceptionCode.pluginInternal,
-                  message: 'Internal plugin error during progress '
-                      'stream processing',
-                  details: error,
-                  stacktrace: stackTrace.toString(),
-                );
-              }();
-
-        sink
-          ..add(ICloudTransferProgress.error(exception))
-          ..close();
+        if (error is PlatformException) {
+          sink.addError(decodePlatformException(error), stackTrace);
+        } else {
+          _logger.severe(
+            'Unexpected progress stream error',
+            error,
+            stackTrace,
+          );
+          sink.addError(
+            _channelContractError(
+              operation: 'transferProgress',
+              message:
+                  'Internal plugin error during progress stream processing',
+              underlying: error,
+            ),
+            stackTrace,
+          );
+        }
+        sink.close();
       },
       handleDone: (sink) {
         sink
@@ -531,10 +554,12 @@ class MethodChannelICloudStorage extends ICloudStoragePlatform {
 
     if (mapList == null) return [];
 
-    return [
-      for (final entry in mapList)
-        if (entry is Map<dynamic, dynamic>) ContainerItem.fromMap(entry),
-    ];
+    return _mapStrictList(
+      mapList,
+      operation: 'listContents',
+      validateEntry: _validateContainerItemPayload,
+      mapEntry: ContainerItem.fromMap,
+    );
   }
 
   @override
@@ -552,10 +577,12 @@ class MethodChannelICloudStorage extends ICloudStoragePlatform {
 
     if (mapList == null) return [];
 
-    return [
-      for (final entry in mapList)
-        if (entry is Map<dynamic, dynamic>) ICloudVersion.fromMap(entry),
-    ];
+    return _mapStrictList(
+      mapList,
+      operation: 'enumerateUnresolvedConflictVersions',
+      validateEntry: _validateICloudVersionPayload,
+      mapEntry: ICloudVersion.fromMap,
+    );
   }
 
   @override
@@ -565,7 +592,7 @@ class MethodChannelICloudStorage extends ICloudStoragePlatform {
     required String versionIdentifier,
     required String destinationPath,
   }) async {
-    await _invokeMethod<void>('copyConflictVersion', {
+    await _invokeVoidMethod('copyConflictVersion', {
       'containerId': containerId,
       'relativePath': relativePath,
       'versionIdentifier': versionIdentifier,
@@ -579,63 +606,124 @@ class MethodChannelICloudStorage extends ICloudStoragePlatform {
     required String relativePath,
     bool removeOtherVersions = false,
   }) async {
-    await _invokeMethod<void>('markConflictResolved', {
+    await _invokeVoidMethod('markConflictResolved', {
       'containerId': containerId,
       'relativePath': relativePath,
       'removeOtherVersions': removeOtherVersions,
     });
   }
 
-  /// Private method to convert the list of maps from platform code to a list of
-  /// ICloudFile object
   GatherResult _mapFilesFromDynamicList(
-    List<dynamic>? mapList,
-  ) {
-    final files = <ICloudFile>[];
-    final invalidEntries = <GatherInvalidEntry>[];
-    if (mapList != null) {
-      var index = 0;
-      for (final entry in mapList) {
-        if (entry is! Map<dynamic, dynamic>) {
-          _logger.fine(
-            'Skipping malformed metadata entry: expected Map, got '
-            '${entry.runtimeType}',
-          );
-          invalidEntries.add(
-            GatherInvalidEntry(
-              error: 'Expected map, got ${entry.runtimeType}',
-              rawEntry: entry,
-              index: index,
-            ),
-          );
-        } else {
-          try {
-            files.add(ICloudFile.fromMap(entry));
-          } on Exception catch (error, stackTrace) {
-            _logger.fine(
-              'Skipping malformed metadata entry: $error',
-              error,
-              stackTrace,
-            );
-            invalidEntries.add(
-              GatherInvalidEntry(
-                error: error.toString(),
-                rawEntry: entry,
-                index: index,
-              ),
-            );
-          }
-        }
-        index++;
+    List<dynamic>? mapList, {
+    required String operation,
+  }) =>
+      GatherResult(
+        files: _mapStrictList(
+          mapList ?? const [],
+          operation: operation,
+          validateEntry: _validateICloudFilePayload,
+          mapEntry: ICloudFile.fromMap,
+        ),
+      );
+
+  List<T> _mapStrictList<T>(
+    List<dynamic> entries, {
+    required String operation,
+    required void Function(Map<dynamic, dynamic>) validateEntry,
+    required T Function(Map<dynamic, dynamic>) mapEntry,
+  }) {
+    final result = <T>[];
+    for (var index = 0; index < entries.length; index++) {
+      final entry = entries[index];
+      if (entry is! Map<dynamic, dynamic>) {
+        throw _channelContractError(
+          operation: operation,
+          message: 'Malformed $operation payload at index $index: '
+              'expected Map, got ${entry.runtimeType}',
+          underlying: entry,
+        );
+      }
+      try {
+        validateEntry(entry);
+        result.add(mapEntry(entry));
+      } on Object catch (error) {
+        throw _channelContractError(
+          operation: operation,
+          message: 'Malformed $operation payload at index $index: $error',
+          underlying: entry,
+        );
       }
     }
-    if (invalidEntries.isNotEmpty) {
-      _logger.warning(
-        'Skipped ${invalidEntries.length} malformed metadata '
-        '${invalidEntries.length == 1 ? 'entry' : 'entries'} during gather.',
-      );
+    return result;
+  }
+
+  void _validateICloudFilePayload(Map<dynamic, dynamic> map) {
+    _requireStringField(map, 'relativePath');
+    for (final key in const [
+      'isDirectory',
+      'isDownloading',
+      'isUploading',
+      'isUploaded',
+      'hasUnresolvedConflicts',
+    ]) {
+      _validateOptionalBoolField(map, key);
     }
-    return GatherResult(files: files, invalidEntries: invalidEntries);
+    for (final key in const [
+      'sizeInBytes',
+      'creationDate',
+      'contentChangeDate',
+    ]) {
+      _validateOptionalNumField(map, key);
+    }
+    _validateOptionalDownloadStatusField(map);
+  }
+
+  void _validateContainerItemPayload(Map<dynamic, dynamic> map) {
+    _requireStringField(map, 'relativePath');
+    for (final key in const [
+      'isDirectory',
+      'isDownloading',
+      'isUploading',
+      'isUploaded',
+      'hasUnresolvedConflicts',
+    ]) {
+      _validateOptionalBoolField(map, key);
+    }
+    _validateOptionalDownloadStatusField(map);
+  }
+
+  void _validateICloudVersionPayload(Map<dynamic, dynamic> map) {
+    _requireStringField(map, 'identifier');
+    _validateOptionalNumField(map, 'modificationDate');
+  }
+
+  void _requireStringField(Map<dynamic, dynamic> map, String key) {
+    if (map[key] is! String) {
+      throw FormatException('$key is required and must be a String');
+    }
+  }
+
+  void _validateOptionalBoolField(Map<dynamic, dynamic> map, String key) {
+    if (map.containsKey(key) && map[key] is! bool) {
+      throw FormatException('$key must be a bool');
+    }
+  }
+
+  void _validateOptionalNumField(Map<dynamic, dynamic> map, String key) {
+    final value = map[key];
+    if (value != null && value is! num) {
+      throw FormatException('$key must be a num or null');
+    }
+  }
+
+  void _validateOptionalDownloadStatusField(Map<dynamic, dynamic> map) {
+    final value = map['downloadStatus'];
+    if (value != null &&
+        value != 'notDownloaded' &&
+        value != 'downloaded' &&
+        value != 'current') {
+      throw FormatException('Unsupported downloadStatus: $value');
+    }
   }
 
   /// Private method to generate event channel names
@@ -652,6 +740,6 @@ class MethodChannelICloudStorage extends ICloudStoragePlatform {
         ...(additionalIdentifier == null
             ? <String>[]
             : <String>[additionalIdentifier]),
-        '${DateTime.now().millisecondsSinceEpoch}_${_random.nextInt(999)}',
+        '${_eventChannelSessionId}_${_nextEventChannelId++}',
       ].join('/');
 }

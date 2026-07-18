@@ -27,6 +27,111 @@ class ICloudDocument: NSDocument {
 
     private let changeObservationLock = NSLock()
     private var _changeObservation: DocumentChangeObservation?
+    private var isPassiveChangePresenter = false
+    private var isRegisteredPassivePresenter = false
+
+    func configurePassiveChangeObservation(
+        _ observation: DocumentChangeObservation
+    ) {
+        changeObservationLock.lock()
+        isPassiveChangePresenter = true
+        _changeObservation = observation
+        changeObservationLock.unlock()
+    }
+
+    private var presentedItemChangeState: (
+        passive: Bool,
+        observation: DocumentChangeObservation?
+    ) {
+        changeObservationLock.lock()
+        defer { changeObservationLock.unlock() }
+        return (isPassiveChangePresenter, _changeObservation)
+    }
+
+    func startPassiveChangePresentation() throws {
+        guard let fileURL,
+              let observation = changeObservation else {
+            throw NSError(
+                domain: NSCocoaErrorDomain,
+                code: NSFileReadUnknownError,
+                userInfo: [
+                    NSLocalizedDescriptionKey:
+                        "Cannot start document observation without a file URL.",
+                ]
+            )
+        }
+
+        let coordinator = NSFileCoordinator(filePresenter: nil)
+        var coordinationError: NSError?
+        var accessError: Error?
+        coordinator.coordinate(
+            readingItemAt: fileURL,
+            options: [],
+            error: &coordinationError
+        ) { coordinatedURL in
+            do {
+                let modificationDate = try contentModificationDate(
+                    at: coordinatedURL
+                )
+                observation.recordReadOrWrite(
+                    modificationDate: modificationDate
+                )
+                NSFileCoordinator.addFilePresenter(self)
+                changeObservationLock.lock()
+                isRegisteredPassivePresenter = true
+                changeObservationLock.unlock()
+            } catch {
+                accessError = error
+            }
+        }
+
+        if let coordinationError {
+            throw coordinationError
+        }
+        if let accessError {
+            throw accessError
+        }
+    }
+
+    func stopPassiveChangePresentation() {
+        let shouldRemove: Bool = {
+            changeObservationLock.lock()
+            defer { changeObservationLock.unlock() }
+            guard isRegisteredPassivePresenter else { return false }
+            isRegisteredPassivePresenter = false
+            return true
+        }()
+
+        if shouldRemove {
+            NSFileCoordinator.removeFilePresenter(self)
+        }
+    }
+
+    func recordSuccessfulPassiveWrite(at url: URL) {
+        guard let modificationDate = try? contentModificationDate(at: url) else {
+            return
+        }
+        changeObservation?.recordReadOrWrite(
+            modificationDate: modificationDate
+        )
+    }
+
+    private func contentModificationDate(at url: URL) throws -> Date {
+        let attributes = try FileManager.default.attributesOfItem(
+            atPath: url.path
+        )
+        guard let modificationDate = attributes[.modificationDate] as? Date else {
+            throw NSError(
+                domain: NSCocoaErrorDomain,
+                code: NSFileReadUnknownError,
+                userInfo: [
+                    NSLocalizedDescriptionKey:
+                        "The presented item has no content modification date.",
+                ]
+            )
+        }
+        return modificationDate
+    }
 
     // MARK: - NSDocument Override Methods
 
@@ -95,24 +200,48 @@ class ICloudDocument: NSDocument {
     }
 
     override func presentedItemDidChange() {
-        super.presentedItemDidChange()
-
-        guard let fileURL = fileURL else { return }
-
-        guard let conflictVersions = NSFileVersion.unresolvedConflictVersionsOfItem(at: fileURL),
-              !conflictVersions.isEmpty else {
-            changeObservation?.emit(kind: .remoteChange)
+        let state = presentedItemChangeState
+        guard state.passive else {
+            super.presentedItemDidChange()
             return
         }
 
-        changeObservation?.emit(kind: .conflict)
-        // Conflict policy is app-owned. The plugin only surfaces the
-        // conflict; it never auto-resolves-and-deletes losing
-        // `NSFileVersion`s. The app enumerates, copies out, and marks
-        // resolved via the dedicated version-exposure primitives.
-        DebugHelper.log(
-            "Document in conflict: \(fileURL.lastPathComponent)"
-        )
+        guard let observation = state.observation,
+              let fileURL else { return }
+
+        let coordinator = NSFileCoordinator(filePresenter: self)
+        var coordinationError: NSError?
+        coordinator.coordinate(
+            readingItemAt: fileURL,
+            options: [],
+            error: &coordinationError
+        ) { coordinatedURL in
+            if let conflictVersions =
+                NSFileVersion.unresolvedConflictVersionsOfItem(
+                    at: coordinatedURL
+                ),
+                !conflictVersions.isEmpty {
+                observation.emit(kind: .conflict)
+                // Conflict policy is app-owned. The plugin only surfaces the
+                // conflict; it never auto-resolves-and-deletes losing
+                // `NSFileVersion`s. The app enumerates, copies out, and marks
+                // resolved via the dedicated version-exposure primitives.
+                DebugHelper.log(
+                    "Document in conflict: \(coordinatedURL.lastPathComponent)"
+                )
+                return
+            }
+
+            guard let modificationDate = try? contentModificationDate(
+                at: coordinatedURL
+            ), observation.consumeContentChange(
+                modificationDate: modificationDate
+            ) else {
+                return
+            }
+
+            observation.emit(kind: .invalidation)
+        }
     }
 
     override func presentedItemDidMove(to newURL: URL) {
@@ -282,7 +411,7 @@ extension ICloudStoragePlugin {
     ) {
         Task.detached(priority: .userInitiated) {
             do {
-                let handled = try await CoordinatedReplaceWriter.live
+                let handled = try await self.coordinatedReplaceWriter(for: url)
                     .overwriteExistingItem(at: url) { replacementURL in
                         try streamCopyToURL(from: sourceURL, to: replacementURL)
                     }
@@ -395,7 +524,7 @@ extension ICloudStoragePlugin {
     ) {
         Task.detached(priority: .userInitiated) {
             do {
-                let handled = try await CoordinatedReplaceWriter.live
+                let handled = try await self.coordinatedReplaceWriter(for: url)
                     .overwriteExistingItem(at: url) { replacementURL in
                         try writeTextToURL(contents, to: replacementURL)
                     }
@@ -468,7 +597,7 @@ extension ICloudStoragePlugin {
     ) {
         Task.detached(priority: .userInitiated) {
             do {
-                let handled = try await CoordinatedReplaceWriter.live
+                let handled = try await self.coordinatedReplaceWriter(for: url)
                     .overwriteExistingItem(at: url) { replacementURL in
                         try writeDataToURL(contents, to: replacementURL)
                     }

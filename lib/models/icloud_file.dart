@@ -1,6 +1,6 @@
 import 'package:equatable/equatable.dart';
 import 'package:icloud_storage_plus/models/download_status.dart';
-import 'package:icloud_storage_plus/models/exceptions.dart';
+import 'package:icloud_storage_plus/src/native_payload.dart';
 
 export 'download_status.dart' show DownloadStatus;
 
@@ -11,23 +11,31 @@ export 'download_status.dart' show DownloadStatus;
 /// immediately-consistent listing after your own mutations (rename, delete,
 /// copy), use `ContainerItem` via `ICloudStorage.listContents` instead.
 class ICloudFile extends Equatable {
-  /// Constructor to create the object from the map passed from platform code.
-  /// The native layer guarantees `relativePath` is always present when a map
-  /// is returned.
+  /// Creates an object from the normalized platform-channel payload.
   ICloudFile.fromMap(Map<dynamic, dynamic> map)
-      : relativePath = _requireRelativePath(map),
-        isDirectory = (map['isDirectory'] as bool?) ?? false,
-        sizeInBytes = _mapToInt(map['sizeInBytes']),
-        creationDate = _mapToDateTime(map['creationDate']),
-        contentChangeDate = _mapToDateTime(map['contentChangeDate']),
-        isDownloading = (map['isDownloading'] as bool?) ?? false,
-        downloadStatus = parseDownloadStatus(map['downloadStatus'] as String?),
-        isUploading = (map['isUploading'] as bool?) ?? false,
-        isUploaded = (map['isUploaded'] as bool?) ?? false,
-        hasUnresolvedConflicts =
-            (map['hasUnresolvedConflicts'] as bool?) ?? false;
+      : relativePath = nativeRequireString(map, 'relativePath'),
+        isDirectory = nativeReadBool(map, 'isDirectory'),
+        sizeInBytes = nativeSecondsNumberToInt(
+          nativeReadNullableNum(map, 'sizeInBytes'),
+        ),
+        creationDate = nativeSecondsNumberToDateTime(
+          nativeReadNullableNum(map, 'creationDate'),
+        ),
+        contentChangeDate = nativeSecondsNumberToDateTime(
+          nativeReadNullableNum(map, 'contentChangeDate'),
+        ),
+        isDownloading = nativeReadBool(map, 'isDownloading'),
+        downloadStatus = parseDownloadStatus(
+          nativeReadNullableString(map, 'downloadStatus'),
+        ),
+        isUploading = nativeReadBool(map, 'isUploading'),
+        isUploaded = nativeReadBool(map, 'isUploaded'),
+        hasUnresolvedConflicts = nativeReadBool(
+          map,
+          'hasUnresolvedConflicts',
+        );
 
-  /// File path relative to the iCloud container
+  /// File path relative to the iCloud container.
   final String relativePath;
 
   /// True when the item represents a directory.
@@ -45,30 +53,21 @@ class ICloudFile extends Equatable {
   /// Nullable when the platform does not provide it.
   final DateTime? contentChangeDate;
 
-  /// Corresponding to NSMetadataUbiquitousItemIsDownloadingKey
+  /// Corresponding to NSMetadataUbiquitousItemIsDownloadingKey.
   final bool isDownloading;
 
   /// Corresponding to NSMetadataUbiquitousItemDownloadingStatusKey.
   /// Nullable when the platform does not provide it.
   final DownloadStatus? downloadStatus;
 
-  /// Corresponding to NSMetadataUbiquitousItemIsUploadingKey
+  /// Corresponding to NSMetadataUbiquitousItemIsUploadingKey.
   final bool isUploading;
 
-  /// Corresponding to NSMetadataUbiquitousItemIsUploadedKey
+  /// Corresponding to NSMetadataUbiquitousItemIsUploadedKey.
   final bool isUploaded;
 
-  /// Corresponding to NSMetadataUbiquitousItemHasUnresolvedConflictsKey
+  /// Corresponding to NSMetadataUbiquitousItemHasUnresolvedConflictsKey.
   final bool hasUnresolvedConflicts;
-
-  static String _requireRelativePath(Map<dynamic, dynamic> map) {
-    final value = map['relativePath'];
-    if (value is String) return value;
-    throw InvalidArgumentException(
-      'relativePath is required and must be a String '
-      '(got: ${value.runtimeType})',
-    );
-  }
 
   @override
   List<Object?> get props => [
@@ -83,18 +82,4 @@ class ICloudFile extends Equatable {
         isUploaded,
         hasUnresolvedConflicts,
       ];
-
-  static int? _mapToInt(dynamic value) {
-    if (value is int) return value;
-    if (value is double) return value.round();
-    if (value is num) return value.toInt();
-    return null;
-  }
-
-  static DateTime? _mapToDateTime(dynamic value) {
-    if (value is num) {
-      return DateTime.fromMillisecondsSinceEpoch((value * 1000).round());
-    }
-    return null;
-  }
 }

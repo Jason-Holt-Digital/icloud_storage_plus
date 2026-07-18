@@ -1,4 +1,5 @@
 import 'package:equatable/equatable.dart';
+import 'package:icloud_storage_plus/src/native_payload.dart';
 
 /// A descriptor for a single unresolved `NSFileVersion` conflict version,
 /// surfaced from the native layer via the version-exposure primitives.
@@ -19,14 +20,12 @@ class ICloudVersion extends Equatable {
     this.modificationDate,
   });
 
-  /// Creates an [ICloudVersion] from a platform channel map.
-  ///
-  /// Used internally by the method channel layer to deserialize native
-  /// results. Expected keys: `identifier` (String, required),
-  /// `modificationDate` (num?, optional).
+  /// Creates an [ICloudVersion] from the platform-channel payload.
   ICloudVersion.fromMap(Map<dynamic, dynamic> map)
-      : identifier = _requireIdentifier(map),
-        modificationDate = _mapToDateTime(map['modificationDate']);
+      : identifier = nativeRequireString(map, 'identifier'),
+        modificationDate = nativeSecondsNumberToDateTime(
+          nativeReadNullableNum(map, 'modificationDate'),
+        );
 
   /// Opaque, round-trippable identifier for the version. Pass back to
   /// `ICloudStorage.copyConflictVersion` to select this version.
@@ -34,22 +33,6 @@ class ICloudVersion extends Equatable {
 
   /// The version's modification date, when available.
   final DateTime? modificationDate;
-
-  static String _requireIdentifier(Map<dynamic, dynamic> map) {
-    final value = map['identifier'];
-    if (value is String) return value;
-    throw FormatException(
-      'identifier is required and must be a String '
-      '(got: ${value.runtimeType})',
-    );
-  }
-
-  static DateTime? _mapToDateTime(dynamic value) {
-    if (value is num) {
-      return DateTime.fromMillisecondsSinceEpoch((value * 1000).round());
-    }
-    return null;
-  }
 
   @override
   List<Object?> get props => [identifier, modificationDate];

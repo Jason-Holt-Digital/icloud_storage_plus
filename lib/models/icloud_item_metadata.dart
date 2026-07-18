@@ -1,22 +1,32 @@
 import 'package:equatable/equatable.dart';
 import 'package:icloud_storage_plus/models/download_status.dart';
-import 'package:icloud_storage_plus/models/exceptions.dart';
+import 'package:icloud_storage_plus/src/native_payload.dart';
 
 /// Typed metadata for a known iCloud item path.
 class ICloudItemMetadata extends Equatable {
-  /// Creates metadata from a platform channel map.
+  /// Creates metadata from a normalized platform-channel payload.
   ICloudItemMetadata.fromMap(Map<dynamic, dynamic> map)
-      : relativePath = _requireRelativePath(map),
-        isDirectory = (map['isDirectory'] as bool?) ?? false,
-        sizeInBytes = _mapToInt(map['sizeInBytes']),
-        creationDate = _mapToDateTime(map['creationDate']),
-        contentChangeDate = _mapToDateTime(map['contentChangeDate']),
-        downloadStatus = parseDownloadStatus(map['downloadStatus'] as String?),
-        isDownloading = (map['isDownloading'] as bool?) ?? false,
-        isUploading = (map['isUploading'] as bool?) ?? false,
-        isUploaded = (map['isUploaded'] as bool?) ?? false,
-        hasUnresolvedConflicts =
-            (map['hasUnresolvedConflicts'] as bool?) ?? false;
+      : relativePath = nativeRequireString(map, 'relativePath'),
+        isDirectory = nativeReadBool(map, 'isDirectory'),
+        sizeInBytes = nativeSecondsNumberToInt(
+          nativeReadNullableNum(map, 'sizeInBytes'),
+        ),
+        creationDate = nativeSecondsNumberToDateTime(
+          nativeReadNullableNum(map, 'creationDate'),
+        ),
+        contentChangeDate = nativeSecondsNumberToDateTime(
+          nativeReadNullableNum(map, 'contentChangeDate'),
+        ),
+        downloadStatus = parseDownloadStatus(
+          nativeReadNullableString(map, 'downloadStatus'),
+        ),
+        isDownloading = nativeReadBool(map, 'isDownloading'),
+        isUploading = nativeReadBool(map, 'isUploading'),
+        isUploaded = nativeReadBool(map, 'isUploaded'),
+        hasUnresolvedConflicts = nativeReadBool(
+          map,
+          'hasUnresolvedConflicts',
+        );
 
   /// File path relative to the iCloud container.
   final String relativePath;
@@ -52,29 +62,6 @@ class ICloudItemMetadata extends Equatable {
   bool get isLocal =>
       downloadStatus == DownloadStatus.downloaded ||
       downloadStatus == DownloadStatus.current;
-
-  static String _requireRelativePath(Map<dynamic, dynamic> map) {
-    final value = map['relativePath'];
-    if (value is String) return value;
-    throw InvalidArgumentException(
-      'relativePath is required and must be a String '
-      '(got: ${value.runtimeType})',
-    );
-  }
-
-  static int? _mapToInt(dynamic value) {
-    if (value is int) return value;
-    if (value is double) return value.round();
-    if (value is num) return value.toInt();
-    return null;
-  }
-
-  static DateTime? _mapToDateTime(dynamic value) {
-    if (value is num) {
-      return DateTime.fromMillisecondsSinceEpoch((value * 1000).round());
-    }
-    return null;
-  }
 
   @override
   List<Object?> get props => [

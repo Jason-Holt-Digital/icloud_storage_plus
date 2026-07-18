@@ -1,39 +1,13 @@
 import 'package:icloud_storage_plus/models/icloud_file.dart';
 
-/// Result of a gather operation, including malformed entries.
+/// Result of a gather operation.
 ///
-/// The [invalidEntries] list contains entries that could not be parsed into
-/// [ICloudFile] instances, usually due to malformed metadata from the native
-/// layer. These can typically be logged for diagnostics and safely ignored.
+/// Malformed native payloads fail the gather call or update stream with a
+/// typed plugin-contract exception rather than returning partial results.
 class GatherResult {
-  /// Creates a gather result with parsed files and invalid entries.
-  const GatherResult({
-    required this.files,
-    required this.invalidEntries,
-  });
+  /// Creates a gather result containing the complete parsed file list.
+  const GatherResult({required this.files});
 
-  /// Parsed, valid file metadata entries.
+  /// Parsed file metadata entries.
   final List<ICloudFile> files;
-
-  /// Entries that could not be parsed into an [ICloudFile].
-  final List<GatherInvalidEntry> invalidEntries;
-}
-
-/// Captures metadata entries that could not be parsed.
-class GatherInvalidEntry {
-  /// Creates a record of a metadata entry that failed to parse.
-  const GatherInvalidEntry({
-    required this.error,
-    this.rawEntry,
-    this.index,
-  });
-
-  /// Description of the parsing error.
-  final String error;
-
-  /// The raw entry returned by the platform (may be non-map).
-  final Object? rawEntry;
-
-  /// Index in the original platform list, when available.
-  final int? index;
 }

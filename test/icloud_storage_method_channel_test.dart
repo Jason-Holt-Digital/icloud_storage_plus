@@ -1,11 +1,23 @@
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:icloud_storage_plus/icloud_storage_method_channel.dart';
+import 'package:icloud_storage_plus/models/download_status.dart';
 import 'package:icloud_storage_plus/models/exceptions.dart';
+import 'package:icloud_storage_plus/models/gather_result.dart';
 import 'package:icloud_storage_plus/models/icloud_document_change.dart';
 import 'package:icloud_storage_plus/models/icloud_file.dart';
 import 'package:icloud_storage_plus/models/icloud_version.dart';
 import 'package:icloud_storage_plus/models/transfer_progress.dart';
+
+const _containerAccessCode = 'E_CTR';
+const _conflictCode = 'E_CONFLICT';
+const _coordinationCode = 'E_COORDINATION';
+const _invalidArgumentCode = 'E_ARG';
+const _nativeCodeError = 'E_NAT';
+
+Matcher _pluginContractFor(String operation) => isA<ICloudOperationException>()
+    .having((error) => error.category, 'category', 'pluginContract')
+    .having((error) => error.operation, 'operation', operation);
 
 void main() {
   final platform = MethodChannelICloudStorage();
@@ -44,8 +56,7 @@ void main() {
               'creationDate': 1.0,
               'contentChangeDate': 1.0,
               'isDownloading': true,
-              'downloadStatus':
-                  'NSMetadataUbiquitousItemDownloadingStatusNotDownloaded',
+              'downloadStatus': 'notDownloaded',
               'isUploading': false,
               'isUploaded': false,
               'hasUnresolvedConflicts': false,
@@ -55,16 +66,18 @@ void main() {
           return null;
         case 'documentExists':
           return true;
-        case 'getDocumentMetadata':
-          return {
-            'relativePath': 'meta.txt',
-            'isDirectory': false,
-          };
         case 'getItemMetadata':
           return {
             'relativePath': 'item.txt',
             'isDirectory': false,
-            'downloadStatus': 'NSURLUbiquitousItemDownloadingStatusCurrent',
+            'sizeInBytes': null,
+            'creationDate': null,
+            'contentChangeDate': null,
+            'downloadStatus': 'current',
+            'isDownloading': false,
+            'isUploading': false,
+            'isUploaded': true,
+            'hasUnresolvedConflicts': false,
           };
         case 'getContainerPath':
           return '/container/path';
@@ -73,7 +86,7 @@ void main() {
             {
               'relativePath': 'file.txt',
               'isDirectory': false,
-              'downloadStatus': 'NSURLUbiquitousItemDownloadingStatusCurrent',
+              'downloadStatus': 'current',
               'isDownloading': false,
               'isUploaded': true,
               'isUploading': false,
@@ -149,6 +162,13 @@ void main() {
               'relativePath': 'Documents/folder/',
               'isDirectory': true,
               'sizeInBytes': null,
+              'creationDate': null,
+              'contentChangeDate': null,
+              'downloadStatus': null,
+              'isDownloading': false,
+              'isUploading': false,
+              'isUploaded': false,
+              'hasUnresolvedConflicts': false,
             }
           ];
         }
@@ -179,12 +199,160 @@ void main() {
       expect(eventChannelName, isNotEmpty);
     });
 
+    test('concurrent gathers allocate unique event channel names', () async {
+      await Future.wait(
+        List.generate(
+          200,
+          (_) => platform.gather(
+            containerId: containerId,
+            onUpdate: (stream) {},
+          ),
+        ),
+      );
+
+      final createNames = mockMethodCalls
+          .where((call) => call.method == 'createEventChannel')
+          .map(
+            (call) => (call.arguments as Map)['eventChannelName'] as String,
+          )
+          .toList();
+      final gatherNames = mockMethodCalls
+          .where((call) => call.method == 'gather')
+          .map(
+            (call) => (call.arguments as Map)['eventChannelName'] as String,
+          )
+          .toList();
+
+      expect(createNames, hasLength(200));
+      expect(createNames.toSet(), hasLength(200));
+      expect(gatherNames.toSet(), createNames.toSet());
+    });
+
+    test('maps update stream platform errors to typed exceptions', () async {
+      mockStreamHandler = MockStreamHandler.inline(
+        onListen: (arguments, events) {
+          events.error(
+            code: _containerAccessCode,
+            message: 'Container unavailable',
+            details: {
+              'category': 'containerAccess',
+              'operation': 'gather',
+              'retryable': false,
+            },
+          );
+        },
+      );
+
+      late Stream<GatherResult> updateStream;
+      await platform.gather(
+        containerId: containerId,
+        onUpdate: (stream) {
+          updateStream = stream;
+        },
+      );
+
+      await expectLater(
+        updateStream,
+        emitsError(isA<ICloudContainerAccessException>()),
+      );
+    });
+
+    test('reports malformed update events as typed contract errors', () async {
+      mockStreamHandler = MockStreamHandler.inline(
+        onListen: (arguments, events) {
+          events.success({'not': 'a list'});
+        },
+      );
+
+      late Stream<GatherResult> updateStream;
+      await platform.gather(
+        containerId: containerId,
+        onUpdate: (stream) {
+          updateStream = stream;
+        },
+      );
+
+      await expectLater(
+        updateStream,
+        emitsError(
+          isA<ICloudOperationException>()
+              .having(
+                (error) => error.category,
+                'category',
+                'pluginContract',
+              )
+              .having((error) => error.operation, 'operation', 'gather'),
+        ),
+      );
+    });
+
+    test('rejects a malformed initial entry as a whole-call failure', () async {
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, (methodCall) async {
+        if (methodCall.method == 'gather') {
+          return [
+            {
+              'relativePath': 'valid.txt',
+              'isDirectory': false,
+              'sizeInBytes': null,
+              'creationDate': null,
+              'contentChangeDate': null,
+              'downloadStatus': 'current',
+              'isDownloading': false,
+              'isUploading': false,
+              'isUploaded': true,
+              'hasUnresolvedConflicts': false,
+            },
+            {
+              'relativePath': 'malformed.txt',
+              'isDirectory': 'false',
+            },
+          ];
+        }
+        return null;
+      });
+
+      await expectLater(
+        () => platform.gather(containerId: containerId),
+        throwsA(_pluginContractFor('gather')),
+      );
+    });
+
+    test('rejects a malformed update entry as a whole-update failure',
+        () async {
+      mockStreamHandler = MockStreamHandler.inline(
+        onListen: (arguments, events) {
+          events.success([
+            {
+              'relativePath': 'valid.txt',
+              'downloadStatus': 'current',
+            },
+            {
+              'relativePath': 'malformed.txt',
+              'downloadStatus': 'unsupported',
+            },
+          ]);
+        },
+      );
+
+      late Stream<GatherResult> updateStream;
+      await platform.gather(
+        containerId: containerId,
+        onUpdate: (stream) => updateStream = stream,
+      );
+
+      await expectLater(
+        updateStream,
+        emitsError(_pluginContractFor('gather')),
+      );
+    });
+
     test('maps structured container access failures', () async {
       TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
           .setMockMethodCallHandler(channel, (methodCall) async {
         if (methodCall.method == 'gather') {
           throw PlatformException(
-            code: PlatformExceptionCode.iCloudConnectionOrPermission,
+            code: _containerAccessCode,
             message: 'Container unavailable',
             details: {
               'category': 'containerAccess',
@@ -214,12 +382,13 @@ void main() {
       await platform.uploadFile(
         containerId: containerId,
         localPath: '/dir/file',
-        cloudRelativePath: 'dest',
+        relativePath: 'dest',
       );
       final args = mockArguments();
       expect(args['containerId'], containerId);
       expect(args['localFilePath'], '/dir/file');
-      expect(args['cloudRelativePath'], 'dest');
+      expect(args['relativePath'], 'dest');
+      expect(args.keys, isNot(contains('cloudRelativePath')));
       expect(args['eventChannelName'], '');
     });
 
@@ -227,7 +396,7 @@ void main() {
       await platform.uploadFile(
         containerId: containerId,
         localPath: '/dir/file',
-        cloudRelativePath: 'dest',
+        relativePath: 'dest',
         onProgress: (stream) => {},
       );
       final args = mockArguments();
@@ -241,12 +410,13 @@ void main() {
     test('downloadFile', () async {
       await platform.downloadFile(
         containerId: containerId,
-        cloudRelativePath: 'file',
+        relativePath: 'file',
         localPath: '/tmp/file',
       );
       final args = mockArguments();
       expect(args['containerId'], containerId);
-      expect(args['cloudRelativePath'], 'file');
+      expect(args['relativePath'], 'file');
+      expect(args.keys, isNot(contains('cloudRelativePath')));
       expect(args['localFilePath'], '/tmp/file');
       expect(args['eventChannelName'], '');
     });
@@ -254,7 +424,7 @@ void main() {
     test('downloadFile with onProgress', () async {
       await platform.downloadFile(
         containerId: containerId,
-        cloudRelativePath: 'file',
+        relativePath: 'file',
         localPath: '/tmp/file',
         onProgress: (stream) => {},
       );
@@ -276,6 +446,19 @@ void main() {
       expect(args['relativePath'], 'Documents/test.json');
       expect(result, 'contents');
     });
+
+    test('readInPlace rejects null responses', () async {
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, (methodCall) async => null);
+
+      await expectLater(
+        () => platform.readInPlace(
+          containerId: containerId,
+          relativePath: 'Documents/test.json',
+        ),
+        throwsA(_pluginContractFor('readInPlace')),
+      );
+    });
   });
 
   group('readInPlaceBytes tests:', () {
@@ -288,6 +471,19 @@ void main() {
       expect(args['containerId'], containerId);
       expect(args['relativePath'], 'Documents/data.bin');
       expect(result, Uint8List.fromList([1, 2, 3]));
+    });
+
+    test('readInPlaceBytes rejects null responses', () async {
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, (methodCall) async => null);
+
+      await expectLater(
+        () => platform.readInPlaceBytes(
+          containerId: containerId,
+          relativePath: 'Documents/data.bin',
+        ),
+        throwsA(_pluginContractFor('readInPlaceBytes')),
+      );
     });
   });
 
@@ -304,12 +500,29 @@ void main() {
       expect(args['contents'], '{"ok":true}');
     });
 
+    test('writeInPlace rejects non-null success responses', () async {
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, (methodCall) async {
+        if (methodCall.method == 'writeInPlace') return true;
+        return null;
+      });
+
+      await expectLater(
+        () => platform.writeInPlace(
+          containerId: containerId,
+          relativePath: 'Documents/test.json',
+          contents: '{"ok":true}',
+        ),
+        throwsA(_pluginContractFor('writeInPlace')),
+      );
+    });
+
     test('writeInPlace maps structured invalidArgument payloads', () async {
       TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
           .setMockMethodCallHandler(channel, (methodCall) async {
         if (methodCall.method == 'writeInPlace') {
           throw PlatformException(
-            code: PlatformExceptionCode.argumentError,
+            code: _invalidArgumentCode,
             message: 'Destination is a directory',
             details: {
               'category': 'invalidArgument',
@@ -337,7 +550,7 @@ void main() {
           .setMockMethodCallHandler(channel, (methodCall) async {
         if (methodCall.method == 'writeInPlace') {
           throw PlatformException(
-            code: PlatformExceptionCode.nativeCodeError,
+            code: _nativeCodeError,
             message: 'Native Code Error',
             details: {
               'category': 'unknownNative',
@@ -401,7 +614,7 @@ void main() {
           .setMockMethodCallHandler(channel, (methodCall) async {
         if (methodCall.method == 'writeInPlaceBytes') {
           throw PlatformException(
-            code: PlatformExceptionCode.coordination,
+            code: _coordinationCode,
             message: 'File coordination failed while replacing an iCloud item.',
             details: {
               'category': 'coordination',
@@ -454,7 +667,7 @@ void main() {
       await platform.uploadFile(
         containerId: containerId,
         localPath: '/dir/file',
-        cloudRelativePath: 'dest',
+        relativePath: 'dest',
         onProgress: (stream) {
           progressStream = stream;
         },
@@ -469,13 +682,18 @@ void main() {
       expect(events[2].isDone, isTrue);
     });
 
-    test('maps error events to error progress', () async {
+    test('maps platform errors to typed stream errors', () async {
       mockStreamHandler = MockStreamHandler.inline(
         onListen: (arguments, events) {
           events.error(
-            code: 'E_TEST',
+            code: _coordinationCode,
             message: 'Boom',
-            details: 'details',
+            details: {
+              'category': 'coordination',
+              'operation': 'downloadFile',
+              'retryable': false,
+              'relativePath': 'file',
+            },
           );
         },
       );
@@ -484,20 +702,51 @@ void main() {
 
       await platform.downloadFile(
         containerId: containerId,
-        cloudRelativePath: 'file',
+        relativePath: 'file',
         localPath: '/tmp/file',
         onProgress: (stream) {
           progressStream = stream;
         },
       );
 
-      final events = await progressStream.toList();
-      expect(events, hasLength(1));
-      final event = events.first;
-      expect(event.isError, isTrue);
-      expect(event.exception?.code, 'E_TEST');
-      expect(event.exception?.message, 'Boom');
-      expect(event.exception?.details, 'details');
+      await expectLater(
+        progressStream,
+        emitsError(
+          isA<ICloudCoordinationException>()
+              .having((error) => error.operation, 'operation', 'downloadFile')
+              .having((error) => error.relativePath, 'relativePath', 'file'),
+        ),
+      );
+    });
+
+    test('reports malformed data as a typed stream error', () async {
+      mockStreamHandler = MockStreamHandler.inline(
+        onListen: (arguments, events) {
+          events.success('invalid');
+        },
+      );
+
+      late Stream<ICloudTransferProgress> progressStream;
+
+      await platform.uploadFile(
+        containerId: containerId,
+        localPath: '/dir/file',
+        relativePath: 'dest',
+        onProgress: (stream) {
+          progressStream = stream;
+        },
+      );
+
+      await expectLater(
+        progressStream,
+        emitsError(
+          isA<ICloudOperationException>().having(
+            (error) => error.category,
+            'category',
+            'pluginContract',
+          ),
+        ),
+      );
     });
 
     test('delivers events after listener attaches', () async {
@@ -514,7 +763,7 @@ void main() {
       await platform.uploadFile(
         containerId: containerId,
         localPath: '/dir/file',
-        cloudRelativePath: 'dest',
+        relativePath: 'dest',
         onProgress: (stream) {
           progressStream = stream;
         },
@@ -592,6 +841,30 @@ void main() {
       );
     });
 
+    test('enumerateUnresolvedConflictVersions rejects malformed entries',
+        () async {
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, (methodCall) async {
+        if (methodCall.method == 'enumerateUnresolvedConflictVersions') {
+          return [
+            {'identifier': 'v1', 'modificationDate': 100.0},
+            {'identifier': 2, 'modificationDate': 200.0},
+          ];
+        }
+        return null;
+      });
+
+      await expectLater(
+        () => platform.enumerateUnresolvedConflictVersions(
+          containerId: containerId,
+          relativePath: 'Documents/file',
+        ),
+        throwsA(
+          _pluginContractFor('enumerateUnresolvedConflictVersions'),
+        ),
+      );
+    });
+
     test(
         'enumerateUnresolvedConflictVersions returns empty list when '
         'native returns null', () async {
@@ -609,6 +882,22 @@ void main() {
       );
 
       expect(versions, isEmpty);
+    });
+
+    test('createEventChannel rejects non-null success responses', () async {
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, (methodCall) async {
+        if (methodCall.method == 'createEventChannel') return 'unexpected';
+        return null;
+      });
+
+      await expectLater(
+        () => platform.gather(
+          containerId: containerId,
+          onUpdate: (stream) {},
+        ),
+        throwsA(_pluginContractFor('createEventChannel')),
+      );
     });
 
     test('copyConflictVersion sends method + args', () async {
@@ -689,7 +978,7 @@ void main() {
           events
             ..success({
               'relativePath': 'Documents/journal.json',
-              'kind': 'remoteChange',
+              'kind': 'invalidation',
             })
             ..success({
               'relativePath': 'Documents/journal.json',
@@ -730,7 +1019,7 @@ void main() {
       expect(events, [
         const ICloudDocumentChange(
           relativePath: 'Documents/journal.json',
-          kind: ICloudDocumentChangeKind.remoteChange,
+          kind: ICloudDocumentChangeKind.invalidation,
         ),
         const ICloudDocumentChange(
           relativePath: 'Documents/journal.json',
@@ -752,7 +1041,7 @@ void main() {
       mockStreamHandler = MockStreamHandler.inline(
         onListen: (arguments, events) {
           events.error(
-            code: PlatformExceptionCode.coordination,
+            code: _coordinationCode,
             message: 'Document observation failed',
             details: {
               'category': 'coordination',
@@ -798,7 +1087,7 @@ void main() {
         }
         if (methodCall.method == 'watchDocumentChanges') {
           throw PlatformException(
-            code: PlatformExceptionCode.iCloudConnectionOrPermission,
+            code: _containerAccessCode,
             message: 'iCloud container unavailable',
             details: {
               'category': 'containerAccess',
@@ -834,7 +1123,7 @@ void main() {
       ]);
     });
 
-    test('watchDocumentChanges surfaces malformed payloads with stable code',
+    test('watchDocumentChanges surfaces malformed payloads as typed errors',
         () async {
       mockStreamHandler = MockStreamHandler.inline(
         onListen: (arguments, events) {
@@ -855,18 +1144,24 @@ void main() {
       await expectLater(
         changeStream,
         emitsError(
-          isA<PlatformException>().having(
-            (error) => error.code,
-            'code',
-            PlatformExceptionCode.invalidEvent,
-          ),
+          isA<ICloudOperationException>()
+              .having(
+                (error) => error.category,
+                'category',
+                'pluginContract',
+              )
+              .having(
+                (error) => error.operation,
+                'operation',
+                'watchDocumentChanges',
+              ),
         ),
       );
     });
 
     test('ICloudDocumentChange.fromMap rejects missing relativePath', () {
       expect(
-        () => ICloudDocumentChange.fromMap(const {'kind': 'remoteChange'}),
+        () => ICloudDocumentChange.fromMap(const {'kind': 'invalidation'}),
         throwsA(isA<FormatException>()),
       );
     });
@@ -898,113 +1193,48 @@ void main() {
     expect(exists, true);
   });
 
-  test('getDocumentMetadata', () async {
-    final metadata = await platform.getDocumentMetadata(
-      containerId: containerId,
-      relativePath: 'file',
-    );
-    expect(metadata?['relativePath'], 'meta.txt');
-  });
-
-  test('getDocumentMetadata preserves raw native downloadStatus', () async {
-    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-        .setMockMethodCallHandler(channel, (methodCall) async {
-      if (methodCall.method == 'getDocumentMetadata') {
-        return {
-          'relativePath': 'meta.txt',
-          'isDirectory': false,
-          'downloadStatus': 'NSURLUbiquitousItemDownloadingStatusCurrent',
-        };
-      }
-      return null;
-    });
-
-    final metadata = await platform.getDocumentMetadata(
-      containerId: containerId,
-      relativePath: 'file',
-    );
-
-    expect(
-      metadata?['downloadStatus'],
-      'NSURLUbiquitousItemDownloadingStatusCurrent',
-    );
-  });
-
-  test(
-    'getDocumentMetadata keeps structured PlatformException behavior raw',
-    () async {
-      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-          .setMockMethodCallHandler(channel, (methodCall) async {
-        if (methodCall.method == 'getDocumentMetadata') {
-          throw PlatformException(
-            code: PlatformExceptionCode.conflict,
-            message: 'Conflict detected',
-            details: {
-              'category': 'conflict',
-              'operation': 'getDocumentMetadata',
-              'retryable': false,
-              'relativePath': 'file',
-            },
-          );
-        }
-        return null;
-      });
-
-      await expectLater(
-        () => platform.getDocumentMetadata(
-          containerId: containerId,
-          relativePath: 'file',
-        ),
-        throwsA(
-          isA<PlatformException>()
-              .having(
-                (error) => error.code,
-                'code',
-                PlatformExceptionCode.conflict,
-              )
-              .having(
-                (error) => error.message,
-                'message',
-                'Conflict detected',
-              ),
-        ),
-      );
-    },
-  );
-
   test('getItemMetadata returns mapped metadata', () async {
     final metadata = await platform.getItemMetadata(
       containerId: containerId,
       relativePath: 'file',
     );
 
-    expect(metadata?['relativePath'], 'item.txt');
-    expect(metadata?['isDirectory'], isFalse);
-    expect(metadata?['downloadStatus'], 'current');
+    expect(metadata?.relativePath, 'item.txt');
+    expect(metadata?.isDirectory, isFalse);
+    expect(metadata?.downloadStatus, DownloadStatus.current);
   });
 
-  test('getItemMetadata preserves unknown native downloadStatus values',
-      () async {
+  test('getItemMetadata rejects unsupported downloadStatus values', () async {
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(channel, (methodCall) async {
       if (methodCall.method == 'getItemMetadata') {
         return {
           'relativePath': 'item.txt',
           'isDirectory': false,
-          'downloadStatus': 'NSURLUbiquitousItemDownloadingStatusMystery',
+          'downloadStatus': 'unsupported',
         };
       }
       return null;
     });
 
-    final metadata = await platform.getItemMetadata(
-      containerId: containerId,
-      relativePath: 'file',
-    );
-
-    expect(
-      metadata?['downloadStatus'],
-      'NSURLUbiquitousItemDownloadingStatusMystery',
+    await expectLater(
+      () => platform.getItemMetadata(
+        containerId: containerId,
+        relativePath: 'file',
+      ),
+      throwsA(
+        isA<ICloudOperationException>()
+            .having(
+              (error) => error.category,
+              'category',
+              'pluginContract',
+            )
+            .having(
+              (error) => error.operation,
+              'operation',
+              'getItemMetadata',
+            ),
+      ),
     );
   });
 
@@ -1027,45 +1257,12 @@ void main() {
     expect(metadata, isNull);
   });
 
-  test('getItemMetadata falls back when new method is unimplemented', () async {
-    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-        .setMockMethodCallHandler(channel, (methodCall) async {
-      mockMethodCall = methodCall;
-      mockMethodCalls.add(methodCall);
-      switch (methodCall.method) {
-        case 'getItemMetadata':
-          throw MissingPluginException();
-        case 'getDocumentMetadata':
-          return {
-            'relativePath': 'fallback.txt',
-            'isDirectory': false,
-            'downloadStatus':
-                'NSMetadataUbiquitousItemDownloadingStatusNotDownloaded',
-          };
-        default:
-          return null;
-      }
-    });
-
-    final metadata = await platform.getItemMetadata(
-      containerId: containerId,
-      relativePath: 'file',
-    );
-
-    expect(metadata?['relativePath'], 'fallback.txt');
-    expect(metadata?['downloadStatus'], 'notDownloaded');
-    expect(
-      mockMethodCalls.map((call) => call.method),
-      ['getItemMetadata', 'getDocumentMetadata'],
-    );
-  });
-
   test('getItemMetadata maps structured conflict payloads', () async {
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(channel, (methodCall) async {
       if (methodCall.method == 'getItemMetadata') {
         throw PlatformException(
-          code: PlatformExceptionCode.conflict,
+          code: _conflictCode,
           message: 'Conflict detected',
           details: {
             'category': 'conflict',
@@ -1102,12 +1299,66 @@ void main() {
     expect(item.isUploaded, true);
   });
 
-  test('icloudAvailable keeps raw PlatformException behavior', () async {
+  test('listContents rejects a malformed element as a whole-call failure',
+      () async {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (methodCall) async {
+      if (methodCall.method == 'listContents') {
+        return [
+          {
+            'relativePath': 'valid.txt',
+            'isDirectory': false,
+            'downloadStatus': 'current',
+            'isDownloading': false,
+            'isUploaded': true,
+            'isUploading': false,
+            'hasUnresolvedConflicts': false,
+          },
+          'malformed',
+        ];
+      }
+      return null;
+    });
+
+    await expectLater(
+      () => platform.listContents(containerId: containerId),
+      throwsA(_pluginContractFor('listContents')),
+    );
+  });
+
+  test('icloudAvailable rejects wrong response type without leaking TypeError',
+      () async {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (methodCall) async {
+      if (methodCall.method == 'icloudAvailable') return 'yes';
+      return null;
+    });
+
+    await expectLater(
+      platform.icloudAvailable,
+      throwsA(_pluginContractFor('icloudAvailable')),
+    );
+  });
+
+  test('missing native plugin maps to typed pluginContract exception',
+      () async {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (methodCall) async {
+      throw MissingPluginException('not registered');
+    });
+
+    await expectLater(
+      () => platform.getContainerPath(containerId: containerId),
+      throwsA(_pluginContractFor('getContainerPath')),
+    );
+  });
+
+  test('icloudAvailable maps PlatformException to typed exception', () async {
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(channel, (methodCall) async {
       if (methodCall.method == 'icloudAvailable') {
         throw PlatformException(
-          code: PlatformExceptionCode.nativeCodeError,
+          code: _nativeCodeError,
           message: 'Native failure',
           details: {
             'category': 'unknownNative',
@@ -1121,7 +1372,13 @@ void main() {
 
     await expectLater(
       platform.icloudAvailable,
-      throwsA(isA<PlatformException>()),
+      throwsA(
+        isA<ICloudUnknownNativeException>().having(
+          (error) => error.operation,
+          'operation',
+          'icloudAvailable',
+        ),
+      ),
     );
   });
 
@@ -1132,7 +1389,7 @@ void main() {
       TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
           .setMockMethodCallHandler(channel, (methodCall) async {
         throw PlatformException(
-          code: PlatformExceptionCode.iCloudConnectionOrPermission,
+          code: _containerAccessCode,
           message: 'Container unavailable',
           details: {
             'category': 'containerAccess',
@@ -1154,7 +1411,7 @@ void main() {
         .setMockMethodCallHandler(channel, (methodCall) async {
       if (methodCall.method == 'documentExists') {
         throw PlatformException(
-          code: PlatformExceptionCode.iCloudConnectionOrPermission,
+          code: _containerAccessCode,
           message: 'Container unavailable',
           details: {
             'category': 'containerAccess',
@@ -1189,7 +1446,7 @@ void main() {
         .setMockMethodCallHandler(channel, (methodCall) async {
       if (methodCall.method == 'writeInPlace') {
         throw PlatformException(
-          code: PlatformExceptionCode.iCloudConnectionOrPermission,
+          code: _containerAccessCode,
           message: 'Container unavailable',
           details: {
             'category': 'containerAccess',
@@ -1220,36 +1477,32 @@ void main() {
     );
   });
 
-  test(
-    'legacy code only getContainerPath PlatformException is preserved',
-    () async {
-      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-          .setMockMethodCallHandler(channel, (methodCall) async {
-        throw PlatformException(
-          code: PlatformExceptionCode.iCloudConnectionOrPermission,
-          message: 'Legacy container failure',
-        );
-      });
-
-      await expectLater(
-        () => platform.getContainerPath(containerId: containerId),
-        throwsA(
-          isA<PlatformException>().having(
-            (error) => error.code,
-            'code',
-            PlatformExceptionCode.iCloudConnectionOrPermission,
-          ),
-        ),
+  test('details-less request failures map to typed unknown exceptions',
+      () async {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (methodCall) async {
+      throw PlatformException(
+        code: _containerAccessCode,
+        message: 'Container failure',
       );
-    },
-  );
+    });
+
+    await expectLater(
+      () => platform.getContainerPath(containerId: containerId),
+      throwsA(
+        isA<ICloudUnknownNativeException>()
+            .having((error) => error.operation, 'operation', 'unknown')
+            .having((error) => error.message, 'message', 'Container failure'),
+      ),
+    );
+  });
 
   test('request response APIs use typed mapping', () async {
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(channel, (methodCall) async {
       if (methodCall.method == 'readInPlace') {
         throw PlatformException(
-          code: PlatformExceptionCode.conflict,
+          code: _conflictCode,
           message: 'Conflict detected',
           details: {
             'category': 'conflict',
@@ -1271,14 +1524,13 @@ void main() {
     );
   });
 
-  test('legacy code only listContents PlatformException is preserved',
-      () async {
+  test('details-less listContents failures map to typed exceptions', () async {
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(channel, (methodCall) async {
       if (methodCall.method == 'listContents') {
         throw PlatformException(
-          code: PlatformExceptionCode.nativeCodeError,
-          message: 'Legacy native failure',
+          code: _nativeCodeError,
+          message: 'Native failure',
         );
       }
       return null;
@@ -1286,47 +1538,45 @@ void main() {
 
     await expectLater(
       () => platform.listContents(containerId: containerId),
-      throwsA(
-        isA<PlatformException>().having(
-          (error) => error.code,
-          'code',
-          PlatformExceptionCode.nativeCodeError,
+      throwsA(isA<ICloudUnknownNativeException>()),
+    );
+  });
+
+  test('transfer progress stream errors are typed stream errors', () async {
+    mockStreamHandler = MockStreamHandler.inline(
+      onListen: (arguments, events) {
+        events.error(
+          code: _nativeCodeError,
+          message: 'Native failure',
+          details: {
+            'category': 'unknownNative',
+            'operation': 'downloadFile',
+            'retryable': false,
+          },
+        );
+      },
+    );
+
+    late Stream<ICloudTransferProgress> progressStream;
+
+    await platform.downloadFile(
+      containerId: containerId,
+      relativePath: 'file',
+      localPath: '/tmp/file',
+      onProgress: (stream) {
+        progressStream = stream;
+      },
+    );
+
+    await expectLater(
+      progressStream,
+      emitsError(
+        isA<ICloudUnknownNativeException>().having(
+          (error) => error.operation,
+          'operation',
+          'downloadFile',
         ),
       ),
     );
   });
-
-  test(
-    'transfer progress stream errors remain PlatformException based',
-    () async {
-      mockStreamHandler = MockStreamHandler.inline(
-        onListen: (arguments, events) {
-          events.error(
-            code: PlatformExceptionCode.nativeCodeError,
-            message: 'Native failure',
-            details: {
-              'category': 'unknownNative',
-              'operation': 'downloadFile',
-              'retryable': false,
-            },
-          );
-        },
-      );
-
-      late Stream<ICloudTransferProgress> progressStream;
-
-      await platform.downloadFile(
-        containerId: containerId,
-        cloudRelativePath: 'file',
-        localPath: '/tmp/file',
-        onProgress: (stream) {
-          progressStream = stream;
-        },
-      );
-
-      final events = await progressStream.toList();
-      expect(events, hasLength(1));
-      expect(events.first.exception, isA<PlatformException>());
-    },
-  );
 }

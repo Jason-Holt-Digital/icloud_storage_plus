@@ -46,14 +46,24 @@ void main() {
       expect(metadata.isLocal, isTrue);
     });
 
-    test('maps raw Apple status strings to normalized DownloadStatus', () {
+    test('maps normalized notDownloaded status', () {
       final metadata = ICloudItemMetadata.fromMap(const {
         'relativePath': 'Documents/report.txt',
-        'downloadStatus': 'NSURLUbiquitousItemDownloadingStatusNotDownloaded',
+        'downloadStatus': 'notDownloaded',
       });
 
       expect(metadata.downloadStatus, DownloadStatus.notDownloaded);
       expect(metadata.isLocal, isFalse);
+    });
+
+    test('rejects present optional fields with the wrong type', () {
+      expect(
+        () => ICloudItemMetadata.fromMap(const {
+          'relativePath': 'Documents/report.txt',
+          'isUploaded': 'yes',
+        }),
+        throwsA(isA<FormatException>()),
+      );
     });
   });
 }

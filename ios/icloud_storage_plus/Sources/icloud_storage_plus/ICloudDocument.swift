@@ -135,7 +135,7 @@ class ICloudDocument: UIDocument {
         }
 
         if !emittedSpecificState {
-            changeObservation?.emit(kind: .remoteChange)
+            changeObservation?.emit(kind: .invalidation)
         }
     }
 

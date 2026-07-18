@@ -60,10 +60,10 @@ Files are only visible in Files/iCloud Drive when they live under the
 
 ```dart
 // Visible in Files app
-cloudRelativePath: 'Documents/notes.txt'
+relativePath: 'Documents/notes.txt'
 
-// Not visible in Files app (still syncs)
-cloudRelativePath: 'cache/notes.txt'
+// Outside the Files app Documents/ convention
+relativePath: 'cache/notes.txt'
 ```
 
 Note: your app’s folder won’t appear in Files/iCloud Drive until at least one
@@ -80,27 +80,29 @@ There are four “tiers” of API in this plugin:
    channel; loads full contents in memory)
     - `readInPlace`, `readInPlaceBytes`
     - `writeInPlace`, `writeInPlaceBytes`
-    - On iOS and macOS, existing-file writes use coordinated atomic replacement so the
-      destination path stays stable during overwrite.
-    - On iOS and macOS, file-write overwrite paths use coordinated local
-      replacement. iCloud Drive sync and document conflict behavior remain
-      Apple's responsibility.
+    - On iOS and macOS, existing-file writes stage the complete new content and
+      install it with `FileManager.replaceItemAt` under coordinated ordinary-write
+      access. This preserves the destination relative path, but is not a
+      crash-durability or watcher-delivery guarantee.
+    - Conflict versions are not automatically resolved or deleted. iCloud Drive
+      sync and document conflict behavior remain Apple's responsibility.
     - Those file-write overwrite paths still reject an existing directory
       destination instead of replacing it.
 3. **File management and queries**
    - `delete`, `move`, `copy`, `rename`
-   - `documentExists`, `getItemMetadata`, `getDocumentMetadata`
-   - On iOS and macOS, copying onto an existing destination also uses coordinated
-     atomic replacement rather than remove-then-copy behavior.
+   - `documentExists`, `getItemMetadata`
+   - On iOS and macOS, copying onto an existing destination uses staged,
+     coordinated replacement rather than remove-then-copy behavior.
    - Existing-destination `copy()` replacement is file-only on iOS and macOS:
      existing directories are rejected instead of replaced.
    - `copy()` can copy files or directories to new destinations. If you need to
      replace an existing directory tree, manage that directory explicitly rather
      than relying on overwrite replacement.
 4. **Container listing** (two complementary approaches)
-   - `gather` — NSMetadataQuery-based; sees remote files and document promises;
-     provides real-time change notifications and download progress; eventually
-     consistent after local mutations
+   - `gather` — `NSMetadataQuery`-based; can discover remote files and document
+     promises and deliver updated metadata snapshots while subscribed. Update
+     timing and coalescing are controlled by Apple; results remain eventually
+     consistent after local mutations.
    - `listContents` — FileManager-based; immediately consistent after local
      mutations; returns download/upload status via URL resource values; only sees
      files with a local representation (including iCloud placeholders)
@@ -111,15 +113,27 @@ filesystem work for the in-place APIs runs there so iCloud container lookup and
 available, Flutter falls back to its default platform-channel dispatch model.
 macOS keeps the existing dispatch model.
 
+## Migration notes for 4.0.0
+
+- `readInPlace` and `readInPlaceBytes` now return non-nullable `String` and
+  `Uint8List` values. Catch `ICloudItemNotFoundException` when a missing item is
+  an optional domain outcome.
+- `ICloudStoragePlatform.getItemMetadata` now returns
+  `Future<ICloudItemMetadata?>`. Custom platform implementations and fakes
+  should return the typed model instead of a raw channel map.
+- Every public `ICloudOperationException` subtype can be constructed directly
+  from normalized fields. The `PlatformException` transport decoder is internal
+  to `MethodChannelICloudStorage` and is not a public API.
+- Native success replies for every `Future<void>` method-channel operation must
+  be `null`. Non-null replies are typed `pluginContract` failures.
+
 ## Migration notes for 2.2.0
 
 - `readInPlace` and `readInPlaceBytes` no longer accept `idleTimeouts` or
   `retryBackoff`. Remove those named arguments from callers.
-- `ICloudTimeoutException`, `ICloudItemNotDownloadedException`,
-  `ICloudDownloadInProgressException`, `PlatformExceptionCode.timeout`,
-  `PlatformExceptionCode.itemNotDownloaded`, and
-  `PlatformExceptionCode.downloadInProgress` were removed. Normal iCloud Drive
-  lifecycle state is no longer a plugin-owned error surface.
+- The former timeout, item-not-downloaded, and download-in-progress exception
+  and transport-code APIs were removed. Normal iCloud Drive lifecycle state is
+  no longer a plugin-owned error surface.
 - On iOS and macOS, `copy()` over an existing destination no longer reports
   plugin-owned readiness failures for non-current, not-downloaded, downloading,
   or conflicted iCloud metadata. It rejects existing directory destinations,
@@ -130,7 +144,6 @@ macOS keeps the existing dispatch model.
 
 ```dart
 import 'dart:io';
-import 'package:flutter/services.dart';
 import 'package:icloud_storage_plus/icloud_storage.dart';
 
 const containerId = 'iCloud.com.yourapp.container';
@@ -159,7 +172,7 @@ Future<void> example() async {
   final localCopy = '${Directory.systemTemp.path}/notes.txt';
   await ICloudStorage.downloadFile(
     containerId: containerId,
-    cloudRelativePath: notesPath,
+    relativePath: notesPath,
     localPath: localCopy,
   );
 
@@ -179,26 +192,79 @@ Future<void> example() async {
       relativePath: 'Documents/.hidden.txt',
     );
   } on InvalidArgumentException catch (e) {
-    // Invalid path segment (starts with '.', contains ':', etc.)
-    // This is a Dart-side exception (not a PlatformException).
+    // Invalid path segment (starts with '.', contains ':', etc.).
     throw Exception(e);
   } on ICloudOperationException catch (e) {
-    // Structured request/response failures are typed.
-    throw Exception(e);
-  } on PlatformException catch (e) {
-    // Legacy unstructured native failures stay raw PlatformException values.
+    // Native and method/event-channel failures are typed.
     throw Exception(e);
   }
 }
 ```
 
+## Watching document changes
+
+`watchDocumentChanges` observes an existing file. Create or load the document
+before starting the watcher, then cancel the returned stream subscription when
+it is no longer needed.
+
+```dart
+import 'dart:async';
+
+StreamSubscription<ICloudDocumentChange>? changeSubscription;
+
+await ICloudStorage.watchDocumentChanges(
+  containerId: containerId,
+  relativePath: notesPath,
+  onChange: (changes) {
+    changeSubscription = changes.listen((change) async {
+      switch (change.kind) {
+        case ICloudDocumentChangeKind.invalidation:
+          // Treat this as an invalidation hint and reread coordinated state.
+          await ICloudStorage.readInPlace(
+            containerId: containerId,
+            relativePath: notesPath,
+          );
+        case ICloudDocumentChangeKind.conflict:
+          // Enumerate versions and apply your app's conflict policy.
+          break;
+        case ICloudDocumentChangeKind.savingError:
+        case ICloudDocumentChangeKind.editingDisabled:
+        case ICloudDocumentChangeKind.unknown:
+          break;
+      }
+    });
+  },
+);
+
+// Later, when this document is no longer observed:
+await changeSubscription?.cancel();
+```
+
+Each call provides one single-subscription stream. Multiple calls may observe
+the same path independently. Treat every event as an invalidation hint and
+reread the current local file or metadata:
+
+- Apple may delay, coalesce, omit, or repeat native callbacks.
+- `invalidation` does not claim that another device originated the change.
+- On macOS, non-conflict callbacks with the same on-disk modification date are
+  suppressed. Conflict callbacks bypass that filter and may repeat.
+- A successful plugin write to an existing watched macOS file records the
+  resulting modification date so a matching queued callback is suppressed.
+  This does not apply to iOS, creation, other processes, or arbitrary writes.
+- Watching a path that does not yet exist is unsupported. Create or materialize
+  the item before starting the watcher.
+
+Conflict events are explicit and app-owned—the plugin never selects or deletes
+conflict versions automatically. iCloud Drive owns cross-device propagation and
+does not provide a real-time latency guarantee. This watcher reports changes
+after Foundation delivers them; it is not a Google Docs-style collaboration
+channel.
+
 ## Transfers with progress
 
-Progress is delivered via an `EventChannel` as *data events* of type
-`ICloudTransferProgress`. Failures are **not** delivered via stream `onError`.
-Transfer-progress failures still carry raw `PlatformException` objects in
-`event.exception` even though structured request/response APIs map to typed
-Dart exceptions.
+Progress and successful completion are delivered as data events of type
+`ICloudTransferProgress`. Failures are delivered through stream `onError` as
+typed `ICloudOperationException` values.
 
 Important: the progress stream is listener-driven; start listening immediately
 in the `onProgress` callback or you may miss early events.
@@ -207,37 +273,36 @@ in the `onProgress` callback or you may miss early events.
 await ICloudStorage.uploadFile(
   containerId: containerId,
   localPath: '/absolute/path/to/local/file.pdf',
-  cloudRelativePath: 'Documents/file.pdf',
+  relativePath: 'Documents/file.pdf',
   onProgress: (stream) {
-    stream.listen((event) {
-      if (event.isProgress) {
-        // 0.0 - 100.0
-        final percent = event.percent!;
-      } else if (event.isError) {
-        final exception = event.exception!;
-      }
-    });
+    stream.listen(
+      (event) {
+        if (event.isProgress) {
+          // 0.0 - 100.0
+          final percent = event.percent!;
+        } else if (event.isDone) {
+          // Transfer completed successfully.
+        }
+      },
+      onError: (Object error) {
+        final exception = error as ICloudOperationException;
+      },
+    );
   },
 );
 ```
 
-## Paths: `cloudRelativePath` vs `relativePath`
+## Container-relative paths
 
-This plugin always works in terms of paths *inside* the iCloud container:
-
-- `cloudRelativePath`: used by `uploadFile` / `downloadFile`
-- `relativePath`: used by the rest of the API
-
-These are the same kind of value; the naming difference exists for historical
-reasons.
+This plugin consistently uses `relativePath` for paths inside the iCloud
+container, including `uploadFile` and `downloadFile`.
 
 ### Trailing slashes
 
 Directory paths can show up with trailing slashes in metadata, so the
 directory-oriented methods accept them:
 
-- `delete`, `move`, `copy`, `rename`, `documentExists`, `getItemMetadata`,
-  `getDocumentMetadata`
+- `delete`, `move`, `copy`, `rename`, `documentExists`, `getItemMetadata`
 
 File-centric operations reject trailing slashes (they require a file path):
 
@@ -257,10 +322,10 @@ contain `:` or `/`, etc).
 
 ## Listing / watching with `gather`
 
-`gather()` returns a `GatherResult`:
-
-- `files`: parsed metadata entries
-- `invalidEntries`: entries that could not be parsed into `ICloudFile`
+`gather()` returns a `GatherResult` whose `files` field contains the complete
+metadata snapshot. If any native entry is malformed, the initial call or update
+stream fails with a typed plugin-contract exception; partial snapshots are never
+returned.
 
 When `onUpdate` is provided, the update stream stays active until the
 subscription is canceled. (Dispose listeners when done.)
@@ -302,7 +367,7 @@ for (final item in items) {
 |---|---|---|
 | Consistency after mutations | Eventually consistent (Spotlight index lag) | **Immediately consistent** |
 | Sees remote-only files | Yes (document promises) | No |
-| Real-time change notifications | Yes (via `onUpdate` stream) | No (one-shot) |
+| Ongoing update stream | Yes; best-effort metadata snapshots with Apple-controlled timing/coalescing | No (one-shot) |
 | Download/upload progress % | Yes | No |
 | Download/upload status | Yes | Yes |
 | Conflict detection | Yes | Yes |
@@ -315,8 +380,9 @@ for (final item in items) {
   for an immediate, accurate listing.
 - **Initial sync on a new device**: use `gather` to discover document promises
   (remote files not yet represented locally).
-- **Live monitoring**: use `gather` with `onUpdate` for real-time change
-  notifications from other devices.
+- **Container-wide refresh hints**: use `gather` with `onUpdate`. Treat each
+  update as a reason to refresh metadata; timing, coalescing, and origin are not
+  guaranteed.
 
 ## iCloud placeholder files
 
@@ -433,16 +499,18 @@ key lookups that are not part of the current implementation.
 Thrown when you pass an invalid path/name to the Dart API (before calling
 native code).
 
-### Structured request/response failures (`ICloudOperationException`)
+### Native and channel failures (`ICloudOperationException`)
 
-Structured native failures from request/response APIs such as `readInPlace`,
-`writeInPlace`, `copy`, `getContainerPath`, and `getItemMetadata` map to typed
-exceptions:
+Native method-channel failures, event-channel failures, and malformed channel
+payloads map to typed exceptions. This applies to request/response APIs such as
+`icloudAvailable`, `readInPlace`, `writeInPlace`, `copy`, `getContainerPath`,
+and `getItemMetadata`, plus `gather`, document-change, and transfer streams:
 
 - `ICloudContainerAccessException`
 - `ICloudItemNotFoundException`
 - `ICloudConflictException`
 - `ICloudCoordinationException`
+- `ICloudInvalidArgumentException`
 - `ICloudUnknownNativeException`
 
 For iOS and macOS file-write overwrite operations, trying to overwrite an existing
@@ -461,29 +529,6 @@ Normal iCloud Drive lifecycle states such as not-current, not-downloaded, or
 downloading are not typed plugin exceptions. Metadata APIs can still report
 those states as metadata, but request/response operations no longer manufacture
 timeout/readiness failures from them.
-
-### Raw `PlatformException` cases
-
-`PlatformException` is still the contract for:
-
-- legacy unstructured request/response failures
-- `getDocumentMetadata()`
-- transfer-progress stream error events (`event.exception`)
-
-`PlatformExceptionCode` contains constants:
-
-- `E_CTR` (iCloud container/permission issues)
-- `E_CONFLICT` (structured conflict failures)
-- `E_FNF` (file not found)
-- `E_FNF_READ` (file not found during read)
-- `E_FNF_WRITE` (file not found during write)
-- `E_NAT` (native error)
-- `E_ARG` (invalid arguments passed to native)
-- `E_READ` (read failure)
-- `E_CANCEL` (operation canceled)
-- `E_INIT` (plugin not properly initialized)
-- `E_PLUGIN_INTERNAL` (internal plugin error)
-- `E_INVALID_EVENT` (invalid event from native layer)
 
 ## Troubleshooting / gotchas
 

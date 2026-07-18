@@ -100,5 +100,5 @@ directory-enumeration loop was removed:
 - `mapMetadataItem(_:containerURL:)` -> `mapMetadataItem(_:containerPath:)`
 - `mapResourceValues(fileURL:values:containerURL:)` -> `mapResourceValues(fileURL:values:containerPath:)`
 - `mapFileAttributesFromQuery(query:containerURL:)` (Implementation updated)
-- `getDocumentMetadata` (Implementation updated)
+- `getItemMetadata` (Implementation updated)
 - `listContents` (Loop optimized in both iOS and macOS plugins)

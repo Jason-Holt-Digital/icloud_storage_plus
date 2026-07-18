@@ -7,6 +7,65 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [4.0.0] - 2026-07-18
+
+### Breaking
+- Removed `getDocumentMetadata`; use `getItemMetadata` for typed metadata.
+- Removed the public `PlatformExceptionCode` constants. Match typed
+  `ICloudOperationException` subclasses and fields instead of transport codes.
+- Raw plugin `PlatformException` failures now map to typed
+  `ICloudOperationException` values, including details-less native failures and
+  malformed method/event-channel contracts.
+- Transfer failures now arrive through the progress stream's `onError` callback
+  as typed exceptions. Remove `ICloudTransferProgressType.error`, `isError`, and
+  `event.exception` handling; data events are only `progress` and `done`.
+- Renamed the `uploadFile` and `downloadFile` named argument and method-channel
+  key from `cloudRelativePath` to `relativePath`.
+- Renamed `ICloudDocumentChangeKind.remoteChange` and its native wire value to
+  `ICloudDocumentChangeKind.invalidation` / `"invalidation"`. Treat it as a
+  refresh hint and reread coordinated state.
+- Removed `GatherInvalidEntry` and `GatherResult.invalidEntries`; malformed
+  gather payloads now fail the whole initial call or update stream.
+- Removed `ICloudStorage.documentsDirectory` and `dataDirectory`. Use the
+  literal `Documents/` path convention for Files app visibility.
+- Download-status payloads now accept only `null`, `notDownloaded`,
+  `downloaded`, or `current`.
+- `readInPlace` and `readInPlaceBytes` now return non-nullable `String` and
+  `Uint8List` values. Missing items throw `ICloudItemNotFoundException` instead
+  of returning `null`.
+- `ICloudStoragePlatform.getItemMetadata` now returns
+  `Future<ICloudItemMetadata?>`; method-channel payloads are decoded exactly
+  once by the default platform implementation.
+- Every advertised `ICloudOperationException` subtype now has a public
+  constructor accepting normalized failure fields. The raw `PlatformException`
+  mapper is internal to the method-channel implementation and is no longer part
+  of the public API.
+- Method and list responses now validate channel types explicitly and map
+  malformed payloads or missing native plugin implementations to typed
+  `pluginContract` exceptions. All `Future<void>` channel operations require a
+  strictly `null` success response, including event-channel creation/start,
+  mutations, transfers, and conflict operations.
+
+### Fixed
+- iOS and macOS existing-file content writes now use ordinary write
+  coordination (`NSFileCoordinator.WritingOptions` empty) instead of
+  replacement-intent (`.forReplacing`) coordination. Complete content is still
+  staged outside the container and installed with `FileManager.replaceItemAt`;
+  unresolved conflict versions remain app-owned.
+- macOS document observation now uses a passive file-presenter path instead of
+  `NSDocument` reload/revert handling. Non-conflict content callbacks are
+  de-duplicated using the on-disk modification date; conflict callbacks bypass
+  that filter and may repeat while unresolved.
+- Successful plugin writes to existing watched macOS files refresh every active
+  same-path watcher baseline, so matching queued callbacks are suppressed.
+- Canceling a change subscription while native observation is starting now
+  prevents late presenter registration and tears the watcher down exactly once.
+
+### Documentation
+- Clarified that document-change and `gather(onUpdate:)` streams are best-effort
+  invalidation/update signals, not real-time or exactly-once change logs.
+- Clarified that watching a missing future path is unsupported.
+
 ## [3.0.0] - 2026-06-24
 
 Major release for the app-owned preserve-both conflict model and the final

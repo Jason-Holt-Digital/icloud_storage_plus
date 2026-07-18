@@ -1,98 +1,91 @@
-import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:icloud_storage_plus/models/exceptions.dart';
 
 void main() {
-  group('mapICloudPlatformException', () {
-    PlatformException buildError(String? category) {
-      return PlatformException(
-        code: PlatformExceptionCode.nativeCodeError,
-        message: 'Native failure',
-        details: {
-          if (category != null) 'category': category,
-          'operation': 'readInPlace',
-          'retryable': true,
-          'relativePath': 'Documents/file.txt',
-          'pathKind': 'containerRelative',
-          'nativeDomain': 'NSCocoaErrorDomain',
-          'nativeCode': 42,
-          'nativeDescription': 'Description',
-          'underlying': 'Underlying',
-        },
+  group('typed exception constructors', () {
+    const fields = (
+      operation: 'readInPlace',
+      retryable: true,
+      message: 'Native failure',
+      relativePath: 'Documents/file.txt',
+      pathKind: 'containerRelative',
+      nativeDomain: 'NSCocoaErrorDomain',
+      nativeCode: 42,
+      nativeDescription: 'Description',
+      underlying: 'Underlying',
+    );
+
+    test('constructs each advertised subtype directly', () {
+      final exceptions = <ICloudOperationException>[
+        ICloudItemNotFoundException(
+          operation: fields.operation,
+          retryable: fields.retryable,
+          message: fields.message,
+          relativePath: fields.relativePath,
+          pathKind: fields.pathKind,
+          nativeDomain: fields.nativeDomain,
+          nativeCode: fields.nativeCode,
+          nativeDescription: fields.nativeDescription,
+          underlying: fields.underlying,
+        ),
+        ICloudContainerAccessException(
+          operation: fields.operation,
+          retryable: fields.retryable,
+          message: fields.message,
+        ),
+        ICloudConflictException(
+          operation: fields.operation,
+          retryable: fields.retryable,
+          message: fields.message,
+        ),
+        ICloudCoordinationException(
+          operation: fields.operation,
+          retryable: fields.retryable,
+          message: fields.message,
+        ),
+        ICloudInvalidArgumentException(
+          operation: fields.operation,
+          retryable: fields.retryable,
+          message: fields.message,
+        ),
+        ICloudUnknownNativeException(
+          operation: fields.operation,
+          retryable: fields.retryable,
+          message: fields.message,
+        ),
+      ];
+
+      expect(exceptions.map((exception) => exception.category), [
+        'itemNotFound',
+        'containerAccess',
+        'conflict',
+        'coordination',
+        'invalidArgument',
+        'unknownNative',
+      ]);
+    });
+
+    test('preserves normalized fields', () {
+      final exception = ICloudItemNotFoundException(
+        operation: fields.operation,
+        retryable: fields.retryable,
+        message: fields.message,
+        relativePath: fields.relativePath,
+        pathKind: fields.pathKind,
+        nativeDomain: fields.nativeDomain,
+        nativeCode: fields.nativeCode,
+        nativeDescription: fields.nativeDescription,
+        underlying: fields.underlying,
       );
-    }
 
-    test('maps conflict category to ICloudConflictException', () {
-      final exception = mapICloudPlatformException(buildError('conflict'));
-
-      expect(exception, isA<ICloudConflictException>());
+      expect(exception.operation, fields.operation);
+      expect(exception.retryable, fields.retryable);
+      expect(exception.relativePath, fields.relativePath);
+      expect(exception.pathKind, fields.pathKind);
+      expect(exception.nativeDomain, fields.nativeDomain);
+      expect(exception.nativeCode, fields.nativeCode);
+      expect(exception.nativeDescription, fields.nativeDescription);
+      expect(exception.underlying, fields.underlying);
     });
-
-    test('preserves non-PII native path kind enrichment', () {
-      final exception = mapICloudPlatformException(buildError('unknownNative'));
-
-      expect(exception.pathKind, 'containerRelative');
-      expect(exception.nativeDomain, 'NSCocoaErrorDomain');
-      expect(exception.nativeCode, 42);
-    });
-
-    test('maps itemNotFound category to ICloudItemNotFoundException', () {
-      final exception = mapICloudPlatformException(buildError('itemNotFound'));
-
-      expect(exception, isA<ICloudItemNotFoundException>());
-    });
-
-    test(
-      'maps containerAccess category to ICloudContainerAccessException',
-      () {
-        final exception = mapICloudPlatformException(
-          buildError('containerAccess'),
-        );
-
-        expect(exception, isA<ICloudContainerAccessException>());
-      },
-    );
-
-    test(
-      'maps explicit coordination category to ICloudCoordinationException',
-      () {
-        final exception = mapICloudPlatformException(
-          buildError('coordination'),
-        );
-
-        expect(exception, isA<ICloudCoordinationException>());
-      },
-    );
-
-    test(
-      'maps invalidArgument category to ICloudInvalidArgumentException',
-      () {
-        final exception = mapICloudPlatformException(
-          buildError('invalidArgument'),
-        );
-
-        expect(exception, isA<ICloudInvalidArgumentException>());
-      },
-    );
-
-    test(
-      'maps missing category to ICloudUnknownNativeException',
-      () {
-        final exception = mapICloudPlatformException(buildError(null));
-
-        expect(exception, isA<ICloudUnknownNativeException>());
-      },
-    );
-
-    test(
-      'maps unknown category to ICloudUnknownNativeException',
-      () {
-        final exception = mapICloudPlatformException(
-          buildError('somethingElse'),
-        );
-
-        expect(exception, isA<ICloudUnknownNativeException>());
-      },
-    );
   });
 }

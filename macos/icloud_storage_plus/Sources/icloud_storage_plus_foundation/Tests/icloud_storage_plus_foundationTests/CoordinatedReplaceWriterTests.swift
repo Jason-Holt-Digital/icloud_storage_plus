@@ -46,6 +46,163 @@ private final class LockedCallLog: @unchecked Sendable {
     }
 }
 
+private final class LockedReplacementResult: @unchecked Sendable {
+    private let lock = NSLock()
+    private var _count = 0
+    private var _contents: Data?
+
+    var count: Int {
+        lock.lock(); defer { lock.unlock() }
+        return _count
+    }
+
+    var contents: Data? {
+        lock.lock(); defer { lock.unlock() }
+        return _contents
+    }
+
+    func record(url: URL) {
+        lock.lock()
+        _count += 1
+        _contents = try? Data(contentsOf: url)
+        lock.unlock()
+    }
+}
+
+private final class RecordingFilePresenter: NSObject, NSFilePresenter,
+    @unchecked Sendable
+{
+    let presentedItemURL: URL?
+    let presentedItemOperationQueue: OperationQueue = {
+        let queue = OperationQueue()
+        queue.maxConcurrentOperationCount = 1
+        return queue
+    }()
+
+    private let lock = NSLock()
+    private var _didRelinquishToWriter = false
+    private var _didAccommodateDeletion = false
+    private var _didObserveChange = false
+
+    var didRelinquishToWriter: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return _didRelinquishToWriter
+    }
+
+    var didAccommodateDeletion: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return _didAccommodateDeletion
+    }
+
+    var didObserveChange: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return _didObserveChange
+    }
+
+    init(url: URL) {
+        presentedItemURL = url
+    }
+
+    func relinquishPresentedItem(
+        toWriter writer: @escaping @Sendable (
+            (@Sendable () -> Void)?
+        ) -> Void
+    ) {
+        lock.lock()
+        _didRelinquishToWriter = true
+        lock.unlock()
+        writer(nil)
+    }
+
+    func accommodatePresentedItemDeletion(
+        completionHandler: @escaping @Sendable (Error?) -> Void
+    ) {
+        lock.lock()
+        _didAccommodateDeletion = true
+        lock.unlock()
+        completionHandler(nil)
+    }
+
+    func presentedItemDidChange() {
+        lock.lock()
+        _didObserveChange = true
+        lock.unlock()
+    }
+
+    func drainOperationQueue() async {
+        await withCheckedContinuation { continuation in
+            presentedItemOperationQueue.addBarrierBlock {
+                continuation.resume()
+            }
+        }
+    }
+}
+
+private final class BaselineFilteringPresenter: NSObject, NSFilePresenter,
+    @unchecked Sendable
+{
+    let presentedItemURL: URL?
+    let presentedItemOperationQueue: OperationQueue = {
+        let queue = OperationQueue()
+        queue.maxConcurrentOperationCount = 1
+        return queue
+    }()
+
+    private let lock = NSLock()
+    private var _invalidationCount = 0
+    private lazy var observation = DocumentChangeObservation(
+        relativePath: presentedItemURL?.lastPathComponent ?? "file.json",
+        onStart: {},
+        onCancel: {},
+        emit: { [weak self] payload in
+            guard payload["kind"] as? String ==
+                DocumentChangeKind.invalidation.rawValue,
+                let self else { return }
+            lock.lock()
+            _invalidationCount += 1
+            lock.unlock()
+        }
+    )
+
+    var invalidationCount: Int {
+        lock.lock(); defer { lock.unlock() }
+        return _invalidationCount
+    }
+
+    init(url: URL) throws {
+        presentedItemURL = url
+        super.init()
+        try observation.start()
+        try recordSuccessfulWrite(at: url)
+    }
+
+    deinit {
+        observation.cancel()
+    }
+
+    func recordSuccessfulWrite(at url: URL) throws {
+        let attributes = try FileManager.default.attributesOfItem(
+            atPath: url.path
+        )
+        guard let modificationDate = attributes[.modificationDate] as? Date else {
+            throw NSError(domain: NSCocoaErrorDomain, code: NSFileReadUnknownError)
+        }
+        observation.recordReadOrWrite(modificationDate: modificationDate)
+    }
+
+    func presentedItemDidChange() {
+        guard let presentedItemURL,
+              let attributes = try? FileManager.default.attributesOfItem(
+                atPath: presentedItemURL.path
+              ),
+              let modificationDate = attributes[.modificationDate] as? Date,
+              observation.consumeContentChange(
+                modificationDate: modificationDate
+              ) else { return }
+        observation.emit(kind: .invalidation)
+    }
+}
+
 final class CoordinatedReplaceWriterTests: XCTestCase {
     func testProductionSourceIsNotDuplicated() throws {
         let productionPath = #filePath
@@ -165,10 +322,10 @@ final class CoordinatedReplaceWriterTests: XCTestCase {
                 "streamHandler.setEvent(nativeCodeError(\n"
                     + "        error,\n"
                     + "        operation: \"uploadFile\",\n"
-                    + "        relativePath: cloudRelativePath\n"
+                    + "        relativePath: relativePath\n"
                     + "      ))"
             ),
-            "upload progress failures should surface cloudRelativePath in "
+            "upload progress failures should surface relativePath in "
                 + "the structured error payload."
         )
     }
@@ -188,6 +345,121 @@ final class CoordinatedReplaceWriterTests: XCTestCase {
 
         XCTAssertTrue(handled)
         XCTAssertEqual(try String(contentsOf: destinationURL), "new")
+    }
+
+    func testPresenterOwnedLiveWriterUpdatesWithoutSelfNotification() async throws {
+        let temporaryDirectory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: temporaryDirectory) }
+
+        let destinationURL = temporaryDirectory.appendingPathComponent("file.json")
+        try Data("old".utf8).write(to: destinationURL)
+
+        let presenter = RecordingFilePresenter(url: destinationURL)
+        NSFileCoordinator.addFilePresenter(presenter)
+        defer { NSFileCoordinator.removeFilePresenter(presenter) }
+
+        let writer = CoordinatedReplaceWriter.makeLive(filePresenter: presenter)
+        let handled = try await writer.overwriteExistingItem(
+            at: destinationURL
+        ) { replacementURL in
+            try Data("new".utf8).write(to: replacementURL)
+        }
+        await presenter.drainOperationQueue()
+
+        XCTAssertTrue(handled)
+        XCTAssertEqual(
+            try Data(contentsOf: destinationURL),
+            Data("new".utf8)
+        )
+        XCTAssertFalse(presenter.didRelinquishToWriter)
+        XCTAssertFalse(presenter.didAccommodateDeletion)
+        XCTAssertFalse(presenter.didObserveChange)
+    }
+
+    func testSuccessfulReplaceHookObservesFinalBytesOnce() async throws {
+        let temporaryDirectory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: temporaryDirectory) }
+
+        let destinationURL = temporaryDirectory.appendingPathComponent("file.json")
+        try Data("old".utf8).write(to: destinationURL)
+        let result = LockedReplacementResult()
+        let writer = CoordinatedReplaceWriter.makeLive(
+            filePresenter: nil,
+            afterSuccessfulReplace: { result.record(url: $0) }
+        )
+
+        let handled = try await writer.overwriteExistingItem(
+            at: destinationURL
+        ) { replacementURL in
+            try Data("new".utf8).write(to: replacementURL)
+        }
+
+        XCTAssertTrue(handled)
+        XCTAssertEqual(result.count, 1)
+        XCTAssertEqual(result.contents, Data("new".utf8))
+    }
+
+    func testSuccessfulWriteBaselinesEverySamePathWatcher() async throws {
+        let temporaryDirectory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: temporaryDirectory) }
+
+        let destinationURL = temporaryDirectory.appendingPathComponent("file.json")
+        try Data("old".utf8).write(to: destinationURL)
+        let firstPresenter = try BaselineFilteringPresenter(url: destinationURL)
+        let secondPresenter = try BaselineFilteringPresenter(url: destinationURL)
+        NSFileCoordinator.addFilePresenter(firstPresenter)
+        NSFileCoordinator.addFilePresenter(secondPresenter)
+        defer {
+            NSFileCoordinator.removeFilePresenter(firstPresenter)
+            NSFileCoordinator.removeFilePresenter(secondPresenter)
+        }
+
+        let writer = CoordinatedReplaceWriter.makeLive(
+            filePresenter: firstPresenter,
+            afterSuccessfulReplace: { resultingURL in
+                try? firstPresenter.recordSuccessfulWrite(at: resultingURL)
+                try? secondPresenter.recordSuccessfulWrite(at: resultingURL)
+            }
+        )
+        let handled = try await writer.overwriteExistingItem(
+            at: destinationURL
+        ) { replacementURL in
+            try Data("plugin write".utf8).write(to: replacementURL)
+        }
+
+        firstPresenter.presentedItemDidChange()
+        secondPresenter.presentedItemDidChange()
+
+        XCTAssertTrue(handled)
+        XCTAssertEqual(firstPresenter.invalidationCount, 0)
+        XCTAssertEqual(secondPresenter.invalidationCount, 0)
+
+        let externalDate = Date(timeIntervalSinceNow: 60)
+        let coordinator = NSFileCoordinator(filePresenter: nil)
+        var coordinationError: NSError?
+        coordinator.coordinate(
+            writingItemAt: destinationURL,
+            options: [],
+            error: &coordinationError
+        ) { coordinatedURL in
+            try? Data("external write".utf8).write(
+                to: coordinatedURL,
+                options: .atomic
+            )
+            try? FileManager.default.setAttributes(
+                [.modificationDate: externalDate],
+                ofItemAtPath: coordinatedURL.path
+            )
+        }
+        if let coordinationError {
+            throw coordinationError
+        }
+
+        firstPresenter.presentedItemDidChange()
+        secondPresenter.presentedItemDidChange()
+
+        XCTAssertEqual(firstPresenter.invalidationCount, 1)
+        XCTAssertEqual(secondPresenter.invalidationCount, 1)
     }
 
     func testLiveWriterRejectsExistingDirectoryDestination() async throws {
@@ -480,7 +752,7 @@ final class CoordinatedReplaceWriterTests: XCTestCase {
 
     /// VAL-MUT-040: a mid-stage replace failure leaves the destination
     /// intact and cleans the staged temp directory.
-    func testAtomicReplaceLeavesDestinationIntactAndCleansTempOnFailure() async throws {
+    func testFailedReplaceLeavesDestinationIntactAndCleansTemp() async throws {
         let temporaryDirectory = try makeTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: temporaryDirectory) }
 

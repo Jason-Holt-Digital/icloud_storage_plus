@@ -42,27 +42,17 @@ export 'models/transfer_progress.dart';
 /// reads and writes are coordinated with iCloud and can stream efficiently
 /// for large files.
 ///
-/// ## iCloud Storage Locations
-/// - **Container Root**: Syncs across devices but not visible in Files app.
-/// - **Documents/**: Visible in Files app.
-/// - **Data/**: App-private; should not sync.
+/// ## Files app visibility
+/// Use the literal `Documents/` path prefix for files that should be visible
+/// in the Files app. Other container-relative paths remain app-managed iCloud
+/// Drive content and may still sync.
 ///
 /// ## Error Contract
-/// Request/response APIs surface structured native failures as typed
-/// [ICloudOperationException] values. Dart-side argument validation still
-/// throws [InvalidArgumentException]. Legacy unstructured native failures
-/// remain raw `PlatformException`s.
-///
-/// Transfer-progress streams keep a separate contract in `2.0.0`: progress
-/// failures remain `PlatformException` values wrapped in
-/// [ICloudTransferProgress.exception].
+/// Native and channel failures surface as typed [ICloudOperationException]
+/// values. Dart-side argument validation throws [InvalidArgumentException].
+/// Transfer failures use the stream error channel with the same typed error
+/// hierarchy.
 class ICloudStorage {
-  /// The directory name for files that should be visible in the Files app.
-  static const String documentsDirectory = 'Documents';
-
-  /// The directory name for temporary files that should not sync to iCloud.
-  static const String dataDirectory = 'Data';
-
   /// Check if iCloud is available and user is logged in.
   static Future<bool> icloudAvailable() async {
     return ICloudStoragePlatform.instance.icloudAvailable();
@@ -82,11 +72,16 @@ class ICloudStorage {
     );
   }
 
-  /// Watch remote-change/document-state events for one document path.
+  /// Watch document invalidation and state events for an existing document.
   ///
-  /// The native Darwin implementations reuse the existing `ICloudDocument`
-  /// presenter. Cancel the Dart stream subscription to tear down the native
-  /// observation.
+  /// Each call provides one single-subscription stream. Cancel that Dart
+  /// subscription when finished; cancellation tears down native observation
+  /// even when presenter registration is still starting.
+  ///
+  /// Treat events as invalidation hints and reread the document through a
+  /// coordinated API. Foundation may coalesce callbacks, and iCloud Drive owns
+  /// cross-device delivery latency. A `conflict` event requires app-owned
+  /// conflict policy; the plugin never resolves versions automatically.
   ///
   /// On iOS, a single native state callback can emit more than one typed event
   /// when multiple document-state flags are active. Debounce or coalesce the
@@ -127,7 +122,7 @@ class ICloudStorage {
   /// Copy a local file into the iCloud container (copy-in).
   ///
   /// [localPath] is the absolute path to a local file to copy.
-  /// [cloudRelativePath] is the path within the iCloud container.
+  /// [relativePath] is the path within the iCloud container.
   /// Use 'Documents/' prefix for Files app visibility.
   ///
   /// This does not keep the local file in sync. After the copy completes,
@@ -138,12 +133,12 @@ class ICloudStorage {
   ///
   /// If [onProgress] is provided, attach a listener immediately inside the
   /// callback. Progress streams are listener-driven (not buffered), so delaying
-  /// `listen()` may miss early progress events. Progress failures delivered on
-  /// the stream remain `PlatformException`-based in `2.0.0`.
+  /// `listen()` may miss early progress events. Failures use the stream error
+  /// channel with typed [ICloudOperationException] values.
   static Future<void> uploadFile({
     required String containerId,
     required String localPath,
-    required String cloudRelativePath,
+    required String relativePath,
     StreamHandler<ICloudTransferProgress>? onProgress,
   }) async {
     if (localPath.trim().isEmpty) {
@@ -152,29 +147,29 @@ class ICloudStorage {
 
     // Transfers are file-centric (UIDocument/NSDocument). A trailing slash
     // indicates a directory path and would be ambiguous or fail natively.
-    if (cloudRelativePath.endsWith('/')) {
+    if (relativePath.endsWith('/')) {
       throw InvalidArgumentException(
-        'invalid cloudRelativePath: $cloudRelativePath',
+        'invalid relativePath: $relativePath',
       );
     }
 
-    if (!_validateRelativePath(cloudRelativePath)) {
+    if (!_validateRelativePath(relativePath)) {
       throw InvalidArgumentException(
-        'invalid cloudRelativePath: $cloudRelativePath',
+        'invalid relativePath: $relativePath',
       );
     }
 
     await ICloudStoragePlatform.instance.uploadFile(
       containerId: containerId,
       localPath: localPath,
-      cloudRelativePath: cloudRelativePath,
+      relativePath: relativePath,
       onProgress: onProgress,
     );
   }
 
   /// Download a file from iCloud, then copy it out to a local path.
   ///
-  /// [cloudRelativePath] is the path within the iCloud container.
+  /// [relativePath] is the path within the iCloud container.
   /// [localPath] is the absolute destination path to write a local copy.
   ///
   /// This is not in-place access. Use [readInPlace] for coordinated reads
@@ -185,11 +180,11 @@ class ICloudStorage {
   ///
   /// If [onProgress] is provided, attach a listener immediately inside the
   /// callback. Progress streams are listener-driven (not buffered), so delaying
-  /// `listen()` may miss early progress events. Progress failures delivered on
-  /// the stream remain `PlatformException`-based in `2.0.0`.
+  /// `listen()` may miss early progress events. Failures use the stream error
+  /// channel with typed [ICloudOperationException] values.
   static Future<void> downloadFile({
     required String containerId,
-    required String cloudRelativePath,
+    required String relativePath,
     required String localPath,
     StreamHandler<ICloudTransferProgress>? onProgress,
   }) async {
@@ -199,21 +194,21 @@ class ICloudStorage {
 
     // Transfers are file-centric (UIDocument/NSDocument). A trailing slash
     // indicates a directory path and would be ambiguous or fail natively.
-    if (cloudRelativePath.endsWith('/')) {
+    if (relativePath.endsWith('/')) {
       throw InvalidArgumentException(
-        'invalid cloudRelativePath: $cloudRelativePath',
+        'invalid relativePath: $relativePath',
       );
     }
 
-    if (!_validateRelativePath(cloudRelativePath)) {
+    if (!_validateRelativePath(relativePath)) {
       throw InvalidArgumentException(
-        'invalid cloudRelativePath: $cloudRelativePath',
+        'invalid relativePath: $relativePath',
       );
     }
 
     await ICloudStoragePlatform.instance.downloadFile(
       containerId: containerId,
-      cloudRelativePath: cloudRelativePath,
+      relativePath: relativePath,
       localPath: localPath,
       onProgress: onProgress,
     );
@@ -233,10 +228,7 @@ class ICloudStorage {
   /// available for the document.
   ///
   /// Throws on file-not-found and other failures.
-  /// Note: the return type is nullable to match the platform interface, but
-  /// the native implementations only return `null` if a platform explicitly
-  /// chooses to.
-  static Future<String?> readInPlace({
+  static Future<String> readInPlace({
     required String containerId,
     required String relativePath,
   }) async {
@@ -274,7 +266,7 @@ class ICloudStorage {
   /// available for the document.
   ///
   /// Throws on file-not-found and other failures.
-  static Future<Uint8List?> readInPlaceBytes({
+  static Future<Uint8List> readInPlaceBytes({
     required String containerId,
     required String relativePath,
   }) async {
@@ -304,10 +296,10 @@ class ICloudStorage {
   ///
   /// Trailing slashes are rejected here because writes are file-centric.
   ///
-  /// Coordinated access writes the full contents as a single operation.
-  /// Existing-file overwrites on Darwin use coordinated atomic replacement so
-  /// the user-visible document path stays stable. Use for small text/JSON
-  /// files.
+  /// Existing-file overwrites on Darwin stage the complete new content and
+  /// install it with `FileManager.replaceItemAt` under coordinated
+  /// ordinary-write access. Conflict versions are not automatically resolved
+  /// or deleted. Use for small text/JSON files.
   static Future<void> writeInPlace({
     required String containerId,
     required String relativePath,
@@ -341,9 +333,10 @@ class ICloudStorage {
   ///
   /// Trailing slashes are rejected here because writes are file-centric.
   ///
-  /// Coordinated access writes the full contents as a single operation.
-  /// Existing-file overwrites on Darwin use coordinated atomic replacement so
-  /// the user-visible document path stays stable. Use for small files.
+  /// Existing-file overwrites on Darwin stage the complete new content and
+  /// install it with `FileManager.replaceItemAt` under coordinated
+  /// ordinary-write access. Conflict versions are not automatically resolved
+  /// or deleted. Use for small files.
   static Future<void> writeInPlaceBytes({
     required String containerId,
     required String relativePath,
@@ -494,9 +487,8 @@ class ICloudStorage {
   /// Get typed metadata for a file or directory without downloading content.
   ///
   /// Trailing slashes are allowed for directory paths returned by metadata.
-  /// Structured native failures map to typed [ICloudOperationException]
-  /// subclasses when the platform returns structured request/response payloads.
-  /// Legacy unstructured native failures remain raw `PlatformException`s.
+  /// Native and channel failures map to typed [ICloudOperationException]
+  /// subclasses.
   static Future<ICloudItemMetadata?> getItemMetadata({
     required String containerId,
     required String relativePath,
@@ -505,30 +497,7 @@ class ICloudStorage {
       throw InvalidArgumentException('invalid relativePath: $relativePath');
     }
 
-    final metadata = await ICloudStoragePlatform.instance.getItemMetadata(
-      containerId: containerId,
-      relativePath: relativePath,
-    );
-
-    if (metadata == null) return null;
-
-    return ICloudItemMetadata.fromMap(metadata);
-  }
-
-  /// Get raw metadata map for a file or directory.
-  ///
-  /// Trailing slashes are allowed for directory paths returned by metadata.
-  /// This compatibility API preserves raw native payloads and raw
-  /// `PlatformException` behavior.
-  static Future<Map<String, dynamic>?> getDocumentMetadata({
-    required String containerId,
-    required String relativePath,
-  }) async {
-    if (!_validateRelativePath(relativePath)) {
-      throw InvalidArgumentException('invalid relativePath: $relativePath');
-    }
-
-    return ICloudStoragePlatform.instance.getDocumentMetadata(
+    return ICloudStoragePlatform.instance.getItemMetadata(
       containerId: containerId,
       relativePath: relativePath,
     );
@@ -549,8 +518,9 @@ class ICloudStorage {
   /// ## When to use this vs [gather]
   ///
   /// - **After your own mutations**: use `listContents` for immediate truth.
-  /// - **Remote sync monitoring**: use `gather` with `onUpdate` for real-time
-  ///   notifications and download progress percentages.
+  /// - **Container metadata updates**: use `gather` with `onUpdate` as a
+  ///   best-effort refresh signal. Timing, coalescing, and origin are not
+  ///   guaranteed.
   /// - **Initial device sync**: `gather` discovers document promises (files
   ///   not yet placeholder'd locally); `listContents` only sees files with
   ///   a local filesystem representation.

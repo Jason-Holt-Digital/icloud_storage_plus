@@ -36,8 +36,8 @@ metadata indexing or downloads.
   updates when you opt into streaming.
 - Upload/download progress streams are backed by a query and emit percent
   updates via an event channel.
-- `documentExists()` (and `getDocumentMetadata()`) use `FileManager.fileExists`
-  by design. Treat them as local-path checks that do not force downloads.
+- `documentExists()` and `getItemMetadata()` use the local filesystem and URL
+  resource values by design. They do not force downloads.
 
 If your app needs a “remote-aware” view of what exists in the container, build
 that from `gather()` rather than `documentExists()`.

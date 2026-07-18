@@ -61,6 +61,26 @@ private enum LaneTestTimeout: Error {
     case timedOut
 }
 
+private final class TaskValueResolver<Value: Sendable>:
+    @unchecked Sendable
+{
+    private let lock = NSLock()
+    private var settled = false
+    private let continuation: CheckedContinuation<Value, Error>
+
+    init(_ continuation: CheckedContinuation<Value, Error>) {
+        self.continuation = continuation
+    }
+
+    func settle(_ result: Result<Value, Error>) {
+        lock.lock()
+        let first = !settled
+        if first { settled = true }
+        lock.unlock()
+        if first { continuation.resume(with: result) }
+    }
+}
+
 private func awaitTaskValue<T: Sendable>(
     _ task: Task<T, Never>,
     timeoutNanoseconds: UInt64
@@ -69,23 +89,8 @@ private func awaitTaskValue<T: Sendable>(
     // or the timeout. A withThrowingTaskGroup alternative hangs because the
     // group must await ALL children before it can throw — so a stuck
     // task.value child blocks the timeout from propagating.
-    final class Resolver<V: Sendable>: @unchecked Sendable {
-        private let lock = NSLock()
-        private var settled = false
-        private let continuation: CheckedContinuation<V, Error>
-        init(_ continuation: CheckedContinuation<V, Error>) {
-            self.continuation = continuation
-        }
-        func settle(_ result: Result<V, Error>) {
-            lock.lock()
-            let first = !settled
-            if first { settled = true }
-            lock.unlock()
-            if first { continuation.resume(with: result) }
-        }
-    }
     return try await withCheckedThrowingContinuation { continuation in
-        let resolver = Resolver(continuation)
+        let resolver = TaskValueResolver(continuation)
         Task { resolver.settle(.success(await task.value)) }
         Task {
             try? await Task.sleep(nanoseconds: timeoutNanoseconds)

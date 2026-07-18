@@ -4,7 +4,12 @@ import FlutterMacOS
 public class ICloudStoragePlugin: NSObject, FlutterPlugin {
   var listStreamHandler: StreamHandler?
   var messenger: FlutterBinaryMessenger?
-  private var streamHandlers: [String: StreamHandler] = [:]
+  private var eventChannelRegistrations: [
+    String: EventChannelRegistration
+  ] = [:]
+  private var retiringEventChannelRegistrations: [
+    String: EventChannelRegistration
+  ] = [:]
   private var progressByEventChannel: [String: Double] = [:]
   private let streamStateQueue = DispatchQueue(
     label: "icloud_storage_plus.stream_state"
@@ -36,6 +41,38 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
   ) {
     self.ubiquityContainerResolver = ubiquityContainerResolver
     super.init()
+  }
+
+  func coordinatedReplaceWriter(
+    for url: URL
+  ) -> CoordinatedReplaceWriter {
+    let standardizedPath = url.standardizedFileURL.path
+    let initialRegistrations = documentChangeRegistrations(
+      for: standardizedPath
+    )
+    return CoordinatedReplaceWriter.makeLive(
+      filePresenter: initialRegistrations.first?.presenter,
+      afterSuccessfulReplace: { [self, initialRegistrations] resultingURL in
+        let currentRegistrations = documentChangeRegistrations(
+          for: standardizedPath
+        )
+        var seenRegistrations = Set<ObjectIdentifier>()
+        for registration in initialRegistrations + currentRegistrations
+        where seenRegistrations.insert(ObjectIdentifier(registration)).inserted {
+          registration.presenter.recordSuccessfulPassiveWrite(at: resultingURL)
+        }
+      }
+    )
+  }
+
+  private func documentChangeRegistrations(
+    for standardizedPath: String
+  ) -> [DocumentChangeRegistration] {
+    documentChangeRegistrationsQueue.sync {
+      documentChangeRegistrations.values.filter {
+        $0.standardizedPath == standardizedPath
+      }
+    }
   }
 
   deinit {
@@ -94,8 +131,6 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
       getContainerPath(call, result)
     case "documentExists":
       documentExists(call, result)
-    case "getDocumentMetadata":
-      getDocumentMetadata(call, result)
     case "getItemMetadata":
       getItemMetadata(call, result)
     case "listContents":
@@ -125,18 +160,19 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
     operation: String,
     relativePath: String? = nil,
     result: @escaping FlutterResult,
-    onFailure: (() -> Void)? = nil,
+    onFailure: ((FlutterError) -> Void)? = nil,
     onResolved: @escaping (URL) -> Void
   ) {
     Task { @MainActor [self] in
       guard let containerURL = await ubiquityContainerResolver.resolve(
         containerId: containerId
       ) else {
-        onFailure?()
-        result(containerAccessError(
+        let error = containerAccessError(
           operation: operation,
           relativePath: relativePath
-        ))
+        )
+        onFailure?(error)
+        result(error)
         return
       }
 
@@ -149,7 +185,7 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
     guard let args = call.arguments as? Dictionary<String, Any>,
           let containerId = args["containerId"] as? String
     else {
-      result(argumentError)
+      result(argumentError(operation: "getContainerPath"))
       return
     }
 
@@ -168,14 +204,18 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
           let containerId = args["containerId"] as? String,
           let eventChannelName = args["eventChannelName"] as? String
     else {
-      result(argumentError)
+      result(argumentError(operation: "gather"))
       return
     }
 
     resolveContainerURL(
       containerId: containerId,
       operation: "gather",
-      result: result
+      result: result,
+      onFailure: { [weak self] _ in
+        guard !eventChannelName.isEmpty else { return }
+        self?.removeStreamHandler(eventChannelName)
+      }
     ) { [self] containerURL in
       startGather(
         containerURL: containerURL,
@@ -192,31 +232,30 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
   ) {
     DebugHelper.log("containerURL: \(containerURL.path)")
 
-    // Verify event channel handler exists before registering observers
-    var streamHandler: StreamHandler?
-    if !eventChannelName.isEmpty {
-      guard let handler = registeredStreamHandler(for: eventChannelName) else {
-        result(FlutterError(code: "E_NO_HANDLER", message: "Event channel '\(eventChannelName)' not created. Call createEventChannel first.", details: nil))
-        return
-      }
-      streamHandler = handler
-    }
+    let streamHandler = eventChannelName.isEmpty
+      ? nil
+      : registeredStreamHandler(for: eventChannelName)
+    let activeEventChannelName = streamHandler == nil ? "" : eventChannelName
 
     let query = NSMetadataQuery.init()
     query.operationQueue = metadataQueryOperationQueue
     query.searchScopes = querySearchScopes
     query.predicate = NSPredicate(format: "%K beginswith %@", NSMetadataItemPathKey, containerURL.path)
     let session = makeMetadataQuerySession(query: query)
+    let lifecycle = GatherSessionLifecycle()
     addGatherFilesObservers(
       session: session,
+      lifecycle: lifecycle,
       containerURL: containerURL,
-      eventChannelName: eventChannelName,
+      eventChannelName: activeEventChannelName,
       result: result
     )
 
     if let streamHandler {
       streamHandler.onCancelHandler = { [weak self, weak session] in
-        session?.cancel()
+        if lifecycle.updatesDidCancel() {
+          session?.cancel()
+        }
         self?.removeStreamHandler(eventChannelName)
       }
     }
@@ -234,7 +273,7 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
           let eventChannelName = args["eventChannelName"] as? String,
           !eventChannelName.isEmpty
     else {
-      result(argumentError)
+      result(argumentError(operation: "watchDocumentChanges"))
       return
     }
 
@@ -243,7 +282,7 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
       operation: "watchDocumentChanges",
       relativePath: relativePath,
       result: result,
-      onFailure: { [weak self] in
+      onFailure: { [weak self] _ in
         self?.removeStreamHandler(eventChannelName)
       }
     ) { [self] containerURL in
@@ -278,11 +317,10 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
       relativePath: relativePath,
       onStart: { [weak document] in
         guard let document else { return }
-        NSFileCoordinator.addFilePresenter(document)
+        try document.startPassiveChangePresentation()
       },
       onCancel: { [weak document] in
-        guard let document else { return }
-        NSFileCoordinator.removeFilePresenter(document)
+        document?.stopPassiveChangePresentation()
       },
       emit: { payload in
         DispatchQueue.main.async {
@@ -290,8 +328,9 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
         }
       }
     )
-    document.changeObservation = observation
+    document.configurePassiveChangeObservation(observation)
     let registration = DocumentChangeRegistration(
+      documentURL: documentURL,
       document: document,
       observation: observation
     )
@@ -308,12 +347,32 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
       }
     }
 
-    observation.start()
-    result(nil)
+    do {
+      try observation.start()
+      result(nil)
+    } catch {
+      registration.cancel()
+      _ = removeDocumentChangeRegistration(
+        eventChannelName,
+        matching: registration
+      )
+      removeStreamHandler(eventChannelName)
+      result(nativeCodeError(
+        error,
+        operation: "watchDocumentChanges",
+        relativePath: relativePath
+      ))
+    }
   }
   
   /// Adds observers for metadata gather and update notifications.
-  private func addGatherFilesObservers(session: MetadataQuerySession, containerURL: URL, eventChannelName: String, result: @escaping FlutterResult) {
+  private func addGatherFilesObservers(
+    session: MetadataQuerySession,
+    lifecycle: GatherSessionLifecycle,
+    containerURL: URL,
+    eventChannelName: String,
+    result: @escaping FlutterResult
+  ) {
     session.addObserver(
       name: NSNotification.Name.NSMetadataQueryDidFinishGathering
     ) { [weak self] session, query, _ in
@@ -325,7 +384,7 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
         }
       }
       let results = query.results.compactMap { $0 as? NSMetadataItem }
-      if eventChannelName.isEmpty {
+      if eventChannelName.isEmpty || lifecycle.initialGatherDidComplete() {
         session.cancel()
       }
 
@@ -391,9 +450,11 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
       "creationDate": (item.value(forAttribute: NSMetadataItemFSCreationDateKey) as? Date)?.timeIntervalSince1970,
       "contentChangeDate": (item.value(forAttribute: NSMetadataItemFSContentChangeDateKey) as? Date)?.timeIntervalSince1970,
       "hasUnresolvedConflicts": (item.value(forAttribute: NSMetadataUbiquitousItemHasUnresolvedConflictsKey) as? Bool) ?? false,
-      "downloadStatus": item.value(
-        forAttribute: NSMetadataUbiquitousItemDownloadingStatusKey
-      ) as? String,
+      "downloadStatus": normalizeDownloadStatus(
+        item.value(
+          forAttribute: NSMetadataUbiquitousItemDownloadingStatusKey
+        ) as? String
+      ),
       "isDownloading": (item.value(forAttribute: NSMetadataUbiquitousItemIsDownloadingKey) as? Bool) ?? false,
       "isUploaded": (item.value(forAttribute: NSMetadataUbiquitousItemIsUploadedKey) as? Bool) ?? false,
       "isUploading": (item.value(forAttribute: NSMetadataUbiquitousItemIsUploadingKey) as? Bool) ?? false,
@@ -413,7 +474,9 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
       "creationDate": values.creationDate?.timeIntervalSince1970,
       "contentChangeDate": values.contentModificationDate?.timeIntervalSince1970,
       "hasUnresolvedConflicts": values.ubiquitousItemHasUnresolvedConflicts ?? false,
-      "downloadStatus": values.ubiquitousItemDownloadingStatus?.rawValue,
+      "downloadStatus": normalizeDownloadStatus(
+        values.ubiquitousItemDownloadingStatus
+      ),
       "isDownloading": values.ubiquitousItemIsDownloading ?? false,
       "isUploaded": values.ubiquitousItemIsUploaded ?? false,
       "isUploading": values.ubiquitousItemIsUploading ?? false,
@@ -539,10 +602,10 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
     guard let args = call.arguments as? Dictionary<String, Any>,
           let containerId = args["containerId"] as? String,
           let localFilePath = args["localFilePath"] as? String,
-          let cloudRelativePath = args["cloudRelativePath"] as? String,
+          let relativePath = args["relativePath"] as? String,
           let eventChannelName = args["eventChannelName"] as? String
     else {
-      result(argumentError)
+      result(argumentError(operation: "uploadFile"))
       return
     }
     let localFileURL = URL(fileURLWithPath: localFilePath)
@@ -552,14 +615,19 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
       do {
         cloudFileURL = try await prepareWriteEntrypointURL(
           containerId: containerId,
-          relativePath: cloudRelativePath
+          relativePath: relativePath
         )
       } catch {
-        result(mapWriteEntrypointPreflightError(
+        let mapped = mapWriteEntrypointPreflightError(
           error,
           operation: "uploadFile",
-          relativePath: cloudRelativePath
-        ))
+          relativePath: relativePath
+        )
+        failProgressStream(
+          eventChannelName: eventChannelName,
+          error: mapped
+        )
+        result(mapped)
         return
       }
 
@@ -594,7 +662,7 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
         if !eventChannelName.isEmpty {
           self.setupUploadProgressMonitoring(
             cloudFileURL: cloudFileURL,
-            cloudRelativePath: cloudRelativePath,
+            relativePath: relativePath,
             eventChannelName: eventChannelName
           )
         }
@@ -603,7 +671,11 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
         let mapped = self.nativeCodeError(
           error,
           operation: "uploadFile",
-          relativePath: cloudRelativePath
+          relativePath: relativePath
+        )
+        self.failProgressStream(
+          eventChannelName: eventChannelName,
+          error: mapped
         )
         result(mapped)
       }
@@ -613,7 +685,7 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
   /// Starts a metadata query to report upload progress.
   private func setupUploadProgressMonitoring(
     cloudFileURL: URL,
-    cloudRelativePath: String,
+    relativePath: String,
     eventChannelName: String
   ) {
     let query = NSMetadataQuery.init()
@@ -635,7 +707,7 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
     }
     addUploadObservers(
       session: session,
-      cloudRelativePath: cloudRelativePath,
+      relativePath: relativePath,
       eventChannelName: eventChannelName
     )
 
@@ -645,7 +717,7 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
   /// Adds observers for upload progress updates.
   private func addUploadObservers(
     session: MetadataQuerySession,
-    cloudRelativePath: String,
+    relativePath: String,
     eventChannelName: String
   ) {
     session.addObserver(
@@ -655,7 +727,7 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
       onUploadQueryNotification(
         session: session,
         query: query,
-        cloudRelativePath: cloudRelativePath,
+        relativePath: relativePath,
         eventChannelName: eventChannelName
       )
     }
@@ -667,7 +739,7 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
       onUploadQueryNotification(
         session: session,
         query: query,
-        cloudRelativePath: cloudRelativePath,
+        relativePath: relativePath,
         eventChannelName: eventChannelName
       )
     }
@@ -677,7 +749,7 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
   private func onUploadQueryNotification(
     session: MetadataQuerySession,
     query: NSMetadataQuery,
-    cloudRelativePath: String,
+    relativePath: String,
     eventChannelName: String
   ) {
     if session.isCancelled || !query.isStarted {
@@ -704,7 +776,7 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
       streamHandler.setEvent(nativeCodeError(
         error,
         operation: "uploadFile",
-        relativePath: cloudRelativePath
+        relativePath: relativePath
       ))
       streamHandler.setEvent(FlutterEndOfEventStream)
       session.cancel()
@@ -731,23 +803,29 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
   private func downloadFile(_ call: FlutterMethodCall, _ result: @escaping FlutterResult) {
     guard let args = call.arguments as? Dictionary<String, Any>,
           let containerId = args["containerId"] as? String,
-          let cloudRelativePath = args["cloudRelativePath"] as? String,
+          let relativePath = args["relativePath"] as? String,
           let localFilePath = args["localFilePath"] as? String,
           let eventChannelName = args["eventChannelName"] as? String
     else {
-      result(argumentError)
+      result(argumentError(operation: "downloadFile"))
       return
     }
     
     resolveContainerURL(
       containerId: containerId,
       operation: "downloadFile",
-      relativePath: cloudRelativePath,
-      result: result
+      relativePath: relativePath,
+      result: result,
+      onFailure: { [weak self] error in
+        self?.failProgressStream(
+          eventChannelName: eventChannelName,
+          error: error
+        )
+      }
     ) { [self] containerURL in
       DebugHelper.log("containerURL: \(containerURL.path)")
 
-      let cloudFileURL = containerURL.appendingPathComponent(cloudRelativePath)
+      let cloudFileURL = containerURL.appendingPathComponent(relativePath)
       let localFileURL = URL(fileURLWithPath: localFilePath)
       do {
         try FileManager.default.startDownloadingUbiquitousItem(at: cloudFileURL)
@@ -755,11 +833,15 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
         let mapped = mapFileNotFoundError(
           error,
           operation: "downloadFile",
-          relativePath: cloudRelativePath
+          relativePath: relativePath
         ) ?? nativeCodeError(
           error,
           operation: "downloadFile",
-          relativePath: cloudRelativePath
+          relativePath: relativePath
+        )
+        failProgressStream(
+          eventChannelName: eventChannelName,
+          error: mapped
         )
         result(mapped)
         return
@@ -791,15 +873,13 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
       if let downloadSession {
         downloadStreamHandler?.onCancelHandler = {
           [weak self, weak downloadSession] in
+          guard let self else { return }
           downloadSession?.cancel()
-          self?.removeStreamHandler(eventChannelName)
-          completeOnce(
-            FlutterError(
-              code: "E_CANCEL",
-              message: "Download canceled",
-              details: nil
-            )
-          )
+          self.removeStreamHandler(eventChannelName)
+          completeOnce(self.cancellationError(
+            operation: "downloadFile",
+            relativePath: relativePath
+          ))
         }
       }
 
@@ -823,11 +903,11 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
           let mapped = mapFileNotFoundError(
             error,
             operation: "downloadFile",
-            relativePath: cloudRelativePath
+            relativePath: relativePath
           ) ?? nativeCodeError(
             error,
             operation: "downloadFile",
-            relativePath: cloudRelativePath
+            relativePath: relativePath
           )
           downloadStreamHandler?.setEvent(mapped)
           downloadStreamHandler?.setEvent(FlutterEndOfEventStream)
@@ -852,7 +932,7 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
           let containerId = args["containerId"] as? String,
           let relativePath = args["relativePath"] as? String
     else {
-      result(argumentError)
+      result(argumentError(operation: "readInPlace"))
       return
     }
 
@@ -893,7 +973,7 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
           let relativePath = args["relativePath"] as? String,
           let contents = args["contents"] as? String
     else {
-      result(argumentError)
+      result(argumentError(operation: "writeInPlace"))
       return
     }
 
@@ -959,7 +1039,7 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
           let containerId = args["containerId"] as? String,
           let relativePath = args["relativePath"] as? String
     else {
-      result(argumentError)
+      result(argumentError(operation: "readInPlaceBytes"))
       return
     }
 
@@ -1004,7 +1084,7 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
           let relativePath = args["relativePath"] as? String,
           let contents = args["contents"] as? FlutterStandardTypedData
     else {
-      result(argumentError)
+      result(argumentError(operation: "writeInPlaceBytes"))
       return
     }
 
@@ -1115,7 +1195,7 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
           let containerId = args["containerId"] as? String,
           let relativePath = args["relativePath"] as? String
     else {
-      result(argumentError)
+      result(argumentError(operation: "documentExists"))
       return
     }
     
@@ -1130,56 +1210,6 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
     }
   }
 
-  /// Get file or directory metadata without downloading content.
-  /// Returns a map that includes `isDirectory` when the item exists.
-  private func getDocumentMetadata(_ call: FlutterMethodCall, _ result: @escaping FlutterResult) {
-    guard let args = call.arguments as? Dictionary<String, Any>,
-          let containerId = args["containerId"] as? String,
-          let relativePath = args["relativePath"] as? String
-    else {
-      result(argumentError)
-      return
-    }
-    
-    resolveContainerURL(
-      containerId: containerId,
-      operation: "getDocumentMetadata",
-      relativePath: relativePath,
-      result: result
-    ) { [self] containerURL in
-      let fileURL = containerURL.appendingPathComponent(relativePath)
-      guard FileManager.default.fileExists(atPath: fileURL.path) else {
-        result(nil)
-        return
-      }
-
-      do {
-        let values = try fileURL.resourceValues(forKeys: [
-          .isDirectoryKey,
-          .fileSizeKey,
-          .creationDateKey,
-          .contentModificationDateKey,
-          .ubiquitousItemDownloadingStatusKey,
-          .ubiquitousItemIsDownloadingKey,
-          .ubiquitousItemIsUploadedKey,
-          .ubiquitousItemIsUploadingKey,
-          .ubiquitousItemHasUnresolvedConflictsKey,
-        ])
-        result(mapResourceValues(
-          fileURL: fileURL,
-          values: values,
-          containerPath: containerURL.standardizedFileURL.path
-        ))
-      } catch {
-        result(nativeCodeError(
-          error,
-          operation: "getDocumentMetadata",
-          relativePath: relativePath
-        ))
-      }
-    }
-  }
-
   /// Get typed metadata for a known path without downloading content.
   /// Returns normalized download status strings and `nil` for missing items.
   private func getItemMetadata(
@@ -1190,7 +1220,7 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
           let containerId = args["containerId"] as? String,
           let relativePath = args["relativePath"] as? String
     else {
-      result(argumentError)
+      result(argumentError(operation: "getItemMetadata"))
       return
     }
 
@@ -1226,7 +1256,7 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
         )
         metadata["downloadStatus"] = normalizeDownloadStatus(
           values.ubiquitousItemDownloadingStatus
-        ) ?? values.ubiquitousItemDownloadingStatus?.rawValue
+        )
         result(metadata)
       } catch {
         result(nativeCodeError(
@@ -1251,7 +1281,7 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
     guard let args = call.arguments as? Dictionary<String, Any>,
           let containerId = args["containerId"] as? String
     else {
-      result(argumentError)
+      result(argumentError(operation: "listContents"))
       return
     }
 
@@ -1354,7 +1384,7 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
           let containerId = args["containerId"] as? String,
           let relativePath = args["relativePath"] as? String
     else {
-      result(argumentError)
+      result(argumentError(operation: "enumerateUnresolvedConflictVersions"))
       return
     }
 
@@ -1396,7 +1426,7 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
           let versionIdentifier = args["versionIdentifier"] as? String,
           let destinationPath = args["destinationPath"] as? String
     else {
-      result(argumentError)
+      result(argumentError(operation: "copyConflictVersion"))
       return
     }
 
@@ -1444,7 +1474,7 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
           let containerId = args["containerId"] as? String,
           let relativePath = args["relativePath"] as? String
     else {
-      result(argumentError)
+      result(argumentError(operation: "markConflictResolved"))
       return
     }
     let removeOtherVersions = (args["removeOtherVersions"] as? Bool) ?? false
@@ -1489,6 +1519,21 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
     return stripped.isEmpty ? diskName : stripped
   }
 
+  /// Normalizes metadata-query status strings to clean enum-style values.
+  private func normalizeDownloadStatus(_ status: String?) -> String? {
+    guard let status else { return nil }
+    switch status {
+    case NSMetadataUbiquitousItemDownloadingStatusNotDownloaded:
+      return "notDownloaded"
+    case NSMetadataUbiquitousItemDownloadingStatusDownloaded:
+      return "downloaded"
+    case NSMetadataUbiquitousItemDownloadingStatusCurrent:
+      return "current"
+    default:
+      return nil
+    }
+  }
+
   /// Normalizes `URLUbiquitousItemDownloadingStatus` to clean
   /// enum-style strings for the Dart layer.
   private func normalizeDownloadStatus(
@@ -1522,7 +1567,7 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
           let containerId = args["containerId"] as? String,
           let relativePath = args["relativePath"] as? String
     else {
-      result(argumentError)
+      result(argumentError(operation: "delete"))
       return
     }
 
@@ -1612,7 +1657,7 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
           let atRelativePath = args["atRelativePath"] as? String,
           let toRelativePath = args["toRelativePath"] as? String
     else {
-      result(argumentError)
+      result(argumentError(operation: "move"))
       return
     }
 
@@ -1712,7 +1757,7 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
           let fromRelativePath = args["fromRelativePath"] as? String,
           let toRelativePath = args["toRelativePath"] as? String
     else {
-      result(argumentError)
+      result(argumentError(operation: "copy"))
       return
     }
 
@@ -1939,30 +1984,79 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
   /// Creates and registers a stream handler for an event channel.
   private func createEventChannel(_ call: FlutterMethodCall, _ result: @escaping FlutterResult) {
     guard let args = call.arguments as? Dictionary<String, Any>,
-          let eventChannelName = args["eventChannelName"] as? String
+          let eventChannelName = args["eventChannelName"] as? String,
+          !eventChannelName.isEmpty
     else {
-      result(argumentError)
+      result(argumentError(operation: "createEventChannel"))
       return
     }
 
     guard let messenger = self.messenger else {
-      result(initializationError)
+      result(initializationError(operation: "createEventChannel"))
       return
     }
 
     let streamHandler = StreamHandler()
-    let eventChannel = FlutterEventChannel(name: eventChannelName, binaryMessenger: messenger)
+    let eventChannel = FlutterEventChannel(
+      name: eventChannelName,
+      binaryMessenger: messenger
+    )
+    let registration = EventChannelRegistration(
+      eventChannel: eventChannel,
+      streamHandler: streamHandler
+    )
+    guard registerEventChannelRegistration(
+      registration,
+      for: eventChannelName
+    ) else {
+      result(argumentError(
+        operation: "createEventChannel",
+        message: "Event channel name is already in use"
+      ))
+      return
+    }
     eventChannel.setStreamHandler(streamHandler)
-    setStreamHandler(streamHandler, for: eventChannelName)
-
     result(nil)
   }
-  
-  /// Removes a stream handler for the given event channel.
+
+  private func failProgressStream(
+    eventChannelName: String,
+    error: FlutterError
+  ) {
+    guard !eventChannelName.isEmpty,
+          let streamHandler = registeredStreamHandler(
+            for: eventChannelName
+          ) else {
+      return
+    }
+    streamHandler.setEvent(error)
+    streamHandler.setEvent(FlutterEndOfEventStream)
+    removeStreamHandler(eventChannelName)
+  }
+
+  /// Removes a stream handler after the Dart cancellation handshake. A
+  /// never-listened channel is unregistered immediately because no Dart
+  /// subscription exists to cancel it.
   private func removeStreamHandler(_ eventChannelName: String) {
-    streamStateQueue.sync {
-      streamHandlers[eventChannelName] = nil
+    let registration: EventChannelRegistration? = streamStateQueue.sync {
+      () -> EventChannelRegistration? in
       progressByEventChannel.removeValue(forKey: eventChannelName)
+      guard let registration = eventChannelRegistrations.removeValue(
+        forKey: eventChannelName
+      ) else {
+        return nil
+      }
+      retiringEventChannelRegistrations[eventChannelName] = registration
+      return registration
+    }
+    registration?.requestUnregister { [weak self, weak registration] in
+      guard let self, let registration else { return }
+      self.streamStateQueue.sync {
+        if self.retiringEventChannelRegistrations[eventChannelName]
+          === registration {
+          self.retiringEventChannelRegistrations[eventChannelName] = nil
+        }
+      }
     }
   }
 
@@ -1981,23 +2075,28 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
     for eventChannelName: String
   ) -> StreamHandler? {
     streamStateQueue.sync {
-      streamHandlers[eventChannelName]
+      eventChannelRegistrations[eventChannelName]?.streamHandler
     }
   }
 
   private func hasStreamHandler(named eventChannelName: String) -> Bool {
     streamStateQueue.sync {
-      streamHandlers[eventChannelName] != nil
+      eventChannelRegistrations[eventChannelName]?.streamHandler != nil
     }
   }
 
-  private func setStreamHandler(
-    _ streamHandler: StreamHandler,
+  private func registerEventChannelRegistration(
+    _ registration: EventChannelRegistration,
     for eventChannelName: String
-  ) {
+  ) -> Bool {
     streamStateQueue.sync {
-      streamHandlers[eventChannelName] = streamHandler
+      guard eventChannelRegistrations[eventChannelName] == nil,
+            retiringEventChannelRegistrations[eventChannelName] == nil else {
+        return false
+      }
+      eventChannelRegistrations[eventChannelName] = registration
       progressByEventChannel[eventChannelName] = 0
+      return true
     }
   }
 
@@ -2033,7 +2132,7 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
     eventChannelName: String
   ) -> (StreamHandler, Double)? {
     streamStateQueue.sync {
-      guard let streamHandler = streamHandlers[eventChannelName] else {
+      guard let streamHandler = eventChannelRegistrations[eventChannelName]?.streamHandler else {
         return nil
       }
       let lastProgress = progressByEventChannel[eventChannelName] ?? 0
@@ -2043,9 +2142,6 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
     }
   }
   
-  let argumentError = FlutterError(code: "E_ARG", message: "Invalid Arguments", details: nil)
-  let initializationError = FlutterError(code: "E_INIT", message: "Plugin not properly initialized", details: nil)
-
   private func flutterError(
     code: String,
     message: String,
@@ -2080,6 +2176,47 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
       details["underlying"] = underlying
     }
     return FlutterError(code: code, message: message, details: details)
+  }
+
+  private func argumentError(
+    operation: String,
+    relativePath: String? = nil,
+    pathKind: String? = nil,
+    message: String = "Invalid arguments"
+  ) -> FlutterError {
+    flutterError(
+      code: "E_ARG",
+      message: message,
+      category: "invalidArgument",
+      operation: operation,
+      retryable: false,
+      relativePath: relativePath,
+      pathKind: pathKind
+    )
+  }
+
+  private func initializationError(operation: String) -> FlutterError {
+    flutterError(
+      code: "E_INIT",
+      message: "Plugin not properly initialized",
+      category: "initialization",
+      operation: operation,
+      retryable: false
+    )
+  }
+
+  private func cancellationError(
+    operation: String,
+    relativePath: String? = nil
+  ) -> FlutterError {
+    flutterError(
+      code: "E_CANCEL",
+      message: "Operation cancelled",
+      category: "cancelled",
+      operation: operation,
+      retryable: false,
+      relativePath: relativePath
+    )
   }
 
   private func containerAccessError(
@@ -2258,13 +2395,19 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
 }
 
 private final class DocumentChangeRegistration {
-  private let document: ICloudDocument
+  let standardizedPath: String
+  let presenter: ICloudDocument
   private let observation: DocumentChangeObservation
   private let cancelLock = NSLock()
   private var didCancel = false
 
-  init(document: ICloudDocument, observation: DocumentChangeObservation) {
-    self.document = document
+  init(
+    documentURL: URL,
+    document: ICloudDocument,
+    observation: DocumentChangeObservation
+  ) {
+    standardizedPath = documentURL.standardizedFileURL.path
+    presenter = document
     self.observation = observation
   }
 
@@ -2284,7 +2427,100 @@ private final class DocumentChangeRegistration {
     guard shouldCancel else { return }
 
     observation.cancel()
-    document.changeObservation = nil
+    presenter.changeObservation = nil
+  }
+}
+
+private final class EventChannelRegistration {
+  let streamHandler: StreamHandler
+  private let eventChannel: FlutterEventChannel
+  private let stateQueue = DispatchQueue(
+    label: "icloud_storage_plus.event_channel_registration"
+  )
+  private enum Lifecycle {
+    case neverListened
+    case listening
+    case cancelled
+  }
+
+  private var lifecycle = Lifecycle.neverListened
+  private var unregisterRequested = false
+  private var unregistered = false
+  private var onUnregistered: (() -> Void)?
+
+  init(
+    eventChannel: FlutterEventChannel,
+    streamHandler: StreamHandler
+  ) {
+    self.eventChannel = eventChannel
+    self.streamHandler = streamHandler
+    streamHandler.onListenAcknowledged = { [weak self] in
+      self?.listenAcknowledged()
+    }
+    streamHandler.onCancelAcknowledged = { [weak self] in
+      self?.cancelAcknowledged()
+    }
+  }
+
+  func requestUnregister(onUnregistered: @escaping () -> Void) {
+    let lifecycle = stateQueue.sync {
+      self.onUnregistered = onUnregistered
+      unregisterRequested = true
+      return self.lifecycle
+    }
+    if lifecycle != .listening && !streamHandler.hasPendingEvents {
+      unregisterIfNotListening()
+    }
+  }
+
+  private func unregisterIfNotListening() {
+    let shouldUnregister = stateQueue.sync {
+      lifecycle != .listening && !unregistered
+    }
+    if shouldUnregister {
+      unregister()
+    }
+  }
+
+  private func listenAcknowledged() {
+    stateQueue.sync {
+      guard !unregistered else { return }
+      lifecycle = .listening
+    }
+  }
+
+  private func cancelAcknowledged() {
+    let shouldUnregister = stateQueue.sync {
+      lifecycle = .cancelled
+      return unregisterRequested && !unregistered
+    }
+    if shouldUnregister {
+      unregister()
+    }
+  }
+
+  private func unregister() {
+    let shouldUnregister = stateQueue.sync {
+      guard !unregistered else { return false }
+      unregistered = true
+      return true
+    }
+    guard shouldUnregister else { return }
+
+    let unregister = { [eventChannel, weak self] in
+      eventChannel.setStreamHandler(nil)
+      let completion = self?.stateQueue.sync { () -> (() -> Void)? in
+        let completion = self?.onUnregistered
+        self?.onUnregistered = nil
+        return completion
+      }
+      completion?()
+    }
+    if Thread.isMainThread {
+      unregister()
+    } else {
+      DispatchQueue.main.async(execute: unregister)
+    }
   }
 }
 
@@ -2292,53 +2528,61 @@ class StreamHandler: NSObject, FlutterStreamHandler {
   private let stateQueue = DispatchQueue(
     label: "icloud_storage_plus.stream_handler"
   )
-  private var eventSink: FlutterEventSink?
-  private var cancelHandler: (() -> Void)?
-  private var isCancelled = false
+  private let eventDelivery = StreamEventDelivery<Any>()
+  private var listening = false
+  private let deferredCancellationHandler = DeferredCancellationHandler()
+  var onListenAcknowledged: (() -> Void)?
+  var onCancelAcknowledged: (() -> Void)?
+
+  var hasPendingEvents: Bool {
+    eventDelivery.hasPendingEvents
+  }
 
   var onCancelHandler: (() -> Void)? {
     get {
       stateQueue.sync {
-        cancelHandler
+        deferredCancellationHandler.current
       }
     }
     set {
-      stateQueue.sync {
-        cancelHandler = newValue
+      let handlerToRun = stateQueue.sync {
+        deferredCancellationHandler.install(newValue)
       }
+      handlerToRun?()
     }
   }
 
   /// Starts listening for events from the native side.
-  func onListen(withArguments arguments: Any?, eventSink events: @escaping FlutterEventSink) -> FlutterError? {
+  func onListen(
+    withArguments arguments: Any?,
+    eventSink events: @escaping FlutterEventSink
+  ) -> FlutterError? {
     stateQueue.sync {
-      isCancelled = false
-      eventSink = events
+      deferredCancellationHandler.activate()
+      listening = true
     }
+    onListenAcknowledged?()
+    eventDelivery.listen(events)
     DebugHelper.log("on listen")
     return nil
   }
 
   /// Stops listening for events from the native side.
   func onCancel(withArguments arguments: Any?) -> FlutterError? {
-    let onCancelHandler = stateQueue.sync { () -> (() -> Void)? in
-      isCancelled = true
-      eventSink = nil
-      return cancelHandler
+    let handlerToRun = stateQueue.sync {
+      listening = false
+      return deferredCancellationHandler.cancel()
     }
-    onCancelHandler?()
+    eventDelivery.cancel()
+    handlerToRun?()
+    onCancelAcknowledged?()
     DebugHelper.log("on cancel")
     return nil
   }
 
   /// Emits an event to the Flutter stream.
   func setEvent(_ data: Any) {
-    stateQueue.sync {
-      if isCancelled {
-        return
-      }
-      eventSink?(data)
-    }
+    eventDelivery.emit(data)
   }
 }
 

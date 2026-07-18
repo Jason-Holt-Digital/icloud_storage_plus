@@ -65,4 +65,49 @@ final class MetadataQuerySessionTests: XCTestCase {
         XCTAssertFalse(wasAdded)
         XCTAssertEqual(notificationCount, 0)
     }
+
+    func testGatherCancellationWaitsForInitialCompletion() {
+        let lifecycle = GatherSessionLifecycle()
+
+        XCTAssertFalse(lifecycle.updatesDidCancel())
+        XCTAssertTrue(lifecycle.initialGatherDidComplete())
+        XCTAssertFalse(lifecycle.initialGatherDidComplete())
+    }
+
+    func testGatherCancellationAfterInitialCompletionIsImmediate() {
+        let lifecycle = GatherSessionLifecycle()
+
+        XCTAssertFalse(lifecycle.initialGatherDidComplete())
+        XCTAssertTrue(lifecycle.updatesDidCancel())
+        XCTAssertFalse(lifecycle.updatesDidCancel())
+    }
+
+    func testConcurrentGatherLifecycleClaimsCancellationOnce() {
+        let lifecycle = GatherSessionLifecycle()
+        let queue = DispatchQueue(
+            label: "MetadataQuerySessionTests.gatherLifecycle",
+            attributes: .concurrent
+        )
+        let group = DispatchGroup()
+        let lock = NSLock()
+        var claimCount = 0
+
+        for index in 0..<100 {
+            group.enter()
+            queue.async {
+                let claimed = index.isMultiple(of: 2)
+                    ? lifecycle.initialGatherDidComplete()
+                    : lifecycle.updatesDidCancel()
+                if claimed {
+                    lock.lock()
+                    claimCount += 1
+                    lock.unlock()
+                }
+                group.leave()
+            }
+        }
+
+        XCTAssertEqual(group.wait(timeout: .now() + 1.0), .success)
+        XCTAssertEqual(claimCount, 1)
+    }
 }

@@ -1,7 +1,7 @@
 import 'package:equatable/equatable.dart';
 import 'package:icloud_storage_plus/models/download_status.dart';
-import 'package:icloud_storage_plus/models/exceptions.dart';
 import 'package:icloud_storage_plus/models/icloud_file.dart';
+import 'package:icloud_storage_plus/src/native_payload.dart';
 
 /// A file or directory entry from the iCloud ubiquity container, enumerated
 /// via `FileManager.contentsOfDirectory` with URL resource values.
@@ -17,28 +17,26 @@ import 'package:icloud_storage_plus/models/icloud_file.dart';
 ///
 /// - **After your own mutations** (rename, delete, save): use `listContents`
 ///   for immediate consistency.
-/// - **For remote sync monitoring** (changes from other devices): use
-///   `gather()` which provides real-time notifications and download progress.
+/// - **For container metadata refresh hints**: use `gather()`, whose update
+///   timing, coalescing, and origin are controlled by Apple.
 /// - **Initial discovery on a new device**: `gather()` discovers document
 ///   promises (files not yet placeholder'd locally); `listContents` only sees
 ///   files with a local representation.
 class ContainerItem extends Equatable {
-  /// Creates a [ContainerItem] from a platform channel map.
-  ///
-  /// Used internally by the method channel layer to deserialize native results.
-  /// Expected keys: `relativePath` (String, required), `downloadStatus`
-  /// (String?), `isDownloading` (bool?), `isUploaded` (bool?),
-  /// `isUploading` (bool?), `hasUnresolvedConflicts` (bool?),
-  /// `isDirectory` (bool?).
+  /// Creates an item from the normalized platform-channel payload.
   ContainerItem.fromMap(Map<dynamic, dynamic> map)
-      : relativePath = _requireRelativePath(map),
-        downloadStatus = parseDownloadStatus(map['downloadStatus'] as String?),
-        isDownloading = (map['isDownloading'] as bool?) ?? false,
-        isUploaded = (map['isUploaded'] as bool?) ?? false,
-        isUploading = (map['isUploading'] as bool?) ?? false,
-        hasUnresolvedConflicts =
-            (map['hasUnresolvedConflicts'] as bool?) ?? false,
-        isDirectory = (map['isDirectory'] as bool?) ?? false;
+      : relativePath = nativeRequireString(map, 'relativePath'),
+        downloadStatus = parseDownloadStatus(
+          nativeReadNullableString(map, 'downloadStatus'),
+        ),
+        isDownloading = nativeReadBool(map, 'isDownloading'),
+        isUploaded = nativeReadBool(map, 'isUploaded'),
+        isUploading = nativeReadBool(map, 'isUploading'),
+        hasUnresolvedConflicts = nativeReadBool(
+          map,
+          'hasUnresolvedConflicts',
+        ),
+        isDirectory = nativeReadBool(map, 'isDirectory');
 
   /// File path relative to the iCloud container root, regardless of which
   /// subdirectory was passed as `relativePath` to `listContents`.
@@ -48,8 +46,7 @@ class ContainerItem extends Equatable {
   ///
   /// Possible values are [DownloadStatus.notDownloaded],
   /// [DownloadStatus.downloaded], or [DownloadStatus.current].
-  /// Null when the platform does not provide it (e.g. the file is not in
-  /// a ubiquity container).
+  /// Null when the platform does not provide it.
   final DownloadStatus? downloadStatus;
 
   /// Whether the system is actively downloading this item.
@@ -68,9 +65,6 @@ class ContainerItem extends Equatable {
   final bool isDirectory;
 
   /// Whether the item has local content available.
-  ///
-  /// Returns `true` when [downloadStatus] is [DownloadStatus.downloaded] or
-  /// [DownloadStatus.current].
   bool get isDownloaded =>
       downloadStatus == DownloadStatus.downloaded ||
       downloadStatus == DownloadStatus.current;
@@ -85,13 +79,4 @@ class ContainerItem extends Equatable {
         hasUnresolvedConflicts,
         isDirectory,
       ];
-
-  static String _requireRelativePath(Map<dynamic, dynamic> map) {
-    final value = map['relativePath'];
-    if (value is String) return value;
-    throw InvalidArgumentException(
-      'relativePath is required and must be a String '
-      '(got: ${value.runtimeType})',
-    );
-  }
 }

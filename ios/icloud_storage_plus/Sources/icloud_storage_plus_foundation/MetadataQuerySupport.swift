@@ -25,3 +25,37 @@ final class CompletionGate {
         }
     }
 }
+
+/// Keeps optional gather updates alive until the initial snapshot completes.
+final class GatherSessionLifecycle {
+    private let queue = DispatchQueue(
+        label: "icloud_storage_plus.gather_session_lifecycle"
+    )
+    private var initialGatherCompleted = false
+    private var updatesCancelled = false
+    private var cancellationClaimed = false
+
+    func initialGatherDidComplete() -> Bool {
+        queue.sync {
+            initialGatherCompleted = true
+            return claimCancellationIfReady()
+        }
+    }
+
+    func updatesDidCancel() -> Bool {
+        queue.sync {
+            updatesCancelled = true
+            return claimCancellationIfReady()
+        }
+    }
+
+    private func claimCancellationIfReady() -> Bool {
+        guard initialGatherCompleted,
+              updatesCancelled,
+              !cancellationClaimed else {
+            return false
+        }
+        cancellationClaimed = true
+        return true
+    }
+}

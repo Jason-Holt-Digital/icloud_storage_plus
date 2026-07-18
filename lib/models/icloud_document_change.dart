@@ -43,8 +43,8 @@ class ICloudDocumentChange extends Equatable {
 
 /// Stable event kinds emitted by the native document presenter bridge.
 enum ICloudDocumentChangeKind {
-  /// The existing `ICloudDocument` presenter observed a remote/item change.
-  remoteChange('remoteChange'),
+  /// The observed document content or state should be refreshed.
+  invalidation('invalidation'),
 
   /// The document entered a conflict state.
   conflict('conflict'),
@@ -68,7 +68,7 @@ enum ICloudDocumentChangeKind {
   /// restriction imposed by the app or system.
   editingDisabled('editingDisabled'),
 
-  /// The native payload contained an unknown kind.
+  /// The native payload contained an unsupported kind.
   unknown('unknown');
 
   const ICloudDocumentChangeKind(this.value);
