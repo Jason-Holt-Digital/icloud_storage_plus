@@ -847,6 +847,61 @@ void main() {
         emitsError(isA<ICloudCoordinationException>()),
       );
     });
+
+    test(
+        'propagates transfer failure after the progress subscription is '
+        'cancelled', () async {
+      mockStreamHandler = MockStreamHandler.inline(
+        onListen: (arguments, events) {},
+      );
+
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, (methodCall) async {
+        mockMethodCall = methodCall;
+        mockMethodCalls.add(methodCall);
+        if (methodCall.method == 'createEventChannel') {
+          final args = mockArguments();
+          lastEventChannelName = args['eventChannelName'] as String?;
+          if (lastEventChannelName != null && mockStreamHandler != null) {
+            final eventChannel = EventChannel(lastEventChannelName!);
+            TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+                .setMockStreamHandler(eventChannel, mockStreamHandler);
+          }
+          return null;
+        }
+        if (methodCall.method == 'uploadFile') {
+          throw PlatformException(
+            code: _coordinationCode,
+            message: 'Boom',
+            details: {
+              'category': 'coordination',
+              'operation': 'uploadFile',
+              'retryable': false,
+              'relativePath': 'dest',
+            },
+          );
+        }
+        return null;
+      });
+
+      // The caller stops monitoring progress while the transfer is still
+      // running, so native can no longer deliver the failure through the
+      // stream. The method-channel failure must not be suppressed.
+      await expectLater(
+        () => platform.uploadFile(
+          containerId: containerId,
+          localPath: '/dir/file',
+          relativePath: 'dest',
+          onProgress: (stream) {
+            stream.listen((_) {}).cancel();
+          },
+        ),
+        throwsA(
+          isA<ICloudCoordinationException>()
+              .having((error) => error.operation, 'operation', 'uploadFile'),
+        ),
+      );
+    });
   });
 
   test('delete', () async {

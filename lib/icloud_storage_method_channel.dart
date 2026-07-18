@@ -165,6 +165,7 @@ class MethodChannelICloudStorage extends ICloudStoragePlatform {
     StreamHandler<ICloudTransferProgress>? onProgress,
   }) async {
     var eventChannelName = '';
+    _TransferProgressSubscription? progressSubscription;
 
     if (onProgress != null) {
       eventChannelName = _generateEventChannelName('uploadFile', containerId);
@@ -175,7 +176,11 @@ class MethodChannelICloudStorage extends ICloudStoragePlatform {
       );
 
       final uploadEventChannel = EventChannel(eventChannelName);
-      final stream = _receiveTransferProgressStream(uploadEventChannel);
+      progressSubscription = _TransferProgressSubscription();
+      final stream = _receiveTransferProgressStream(
+        uploadEventChannel,
+        progressSubscription,
+      );
 
       onProgress(stream);
     }
@@ -188,29 +193,33 @@ class MethodChannelICloudStorage extends ICloudStoragePlatform {
         'relativePath': relativePath,
         'eventChannelName': eventChannelName,
       },
-      hasProgressListener: onProgress != null,
+      progressSubscription: progressSubscription,
     );
   }
 
   /// Runs a transfer method call, routing failures to the progress stream
-  /// only when a listener is attached.
+  /// only when it is still delivering to the caller.
   ///
-  /// When [hasProgressListener] is true the native transfer reports failures
-  /// through the progress stream's error channel, so this Future completes
-  /// normally instead of reporting the same failure twice.
+  /// When a progress stream is attached the native transfer reports failures
+  /// through the stream's error channel, so this Future completes normally
+  /// instead of reporting the same failure twice. If the caller has already
+  /// cancelled the progress subscription, native can no longer deliver the
+  /// stream error, so the method-channel failure is the only signal left and
+  /// must propagate.
   Future<void> _invokeTransferMethod(
     String method,
     Map<String, Object?> arguments, {
-    required bool hasProgressListener,
+    required _TransferProgressSubscription? progressSubscription,
   }) async {
-    if (!hasProgressListener) {
+    if (progressSubscription == null) {
       await _invokeVoidMethod(method, arguments);
       return;
     }
     try {
       await _invokeVoidMethod(method, arguments);
     } on ICloudOperationException {
-      // Failure already surfaced on the progress stream's error channel.
+      if (progressSubscription.cancelledByCaller) rethrow;
+      // Otherwise the failure surfaced on the progress stream's error channel.
     }
   }
 
@@ -222,6 +231,7 @@ class MethodChannelICloudStorage extends ICloudStoragePlatform {
     StreamHandler<ICloudTransferProgress>? onProgress,
   }) async {
     var eventChannelName = '';
+    _TransferProgressSubscription? progressSubscription;
 
     if (onProgress != null) {
       eventChannelName = _generateEventChannelName('downloadFile', containerId);
@@ -232,7 +242,11 @@ class MethodChannelICloudStorage extends ICloudStoragePlatform {
       );
 
       final downloadEventChannel = EventChannel(eventChannelName);
-      final stream = _receiveTransferProgressStream(downloadEventChannel);
+      progressSubscription = _TransferProgressSubscription();
+      final stream = _receiveTransferProgressStream(
+        downloadEventChannel,
+        progressSubscription,
+      );
 
       onProgress(stream);
     }
@@ -245,7 +259,7 @@ class MethodChannelICloudStorage extends ICloudStoragePlatform {
         'localFilePath': localPath,
         'eventChannelName': eventChannelName,
       },
-      hasProgressListener: onProgress != null,
+      progressSubscription: progressSubscription,
     );
   }
 
@@ -522,9 +536,12 @@ class MethodChannelICloudStorage extends ICloudStoragePlatform {
   /// progress events.
   ///
   /// Failures are emitted through the stream error channel as typed
-  /// [ICloudOperationException] values.
+  /// [ICloudOperationException] values. Cancelling the returned subscription
+  /// marks [subscription] so a later method-channel failure is not suppressed
+  /// once the stream can no longer deliver it.
   Stream<ICloudTransferProgress> _receiveTransferProgressStream(
     EventChannel eventChannel,
+    _TransferProgressSubscription subscription,
   ) {
     final transformer =
         StreamTransformer<Object?, ICloudTransferProgress>.fromHandlers(
@@ -572,7 +589,25 @@ class MethodChannelICloudStorage extends ICloudStoragePlatform {
       },
     );
 
-    return eventChannel.receiveBroadcastStream().transform(transformer);
+    final source =
+        eventChannel.receiveBroadcastStream().transform(transformer);
+    final controller = StreamController<ICloudTransferProgress>.broadcast();
+    StreamSubscription<ICloudTransferProgress>? sourceSubscription;
+    controller
+      ..onListen = () {
+        sourceSubscription = source.listen(
+          controller.add,
+          onError: controller.addError,
+          onDone: controller.close,
+        );
+      }
+      ..onCancel = () {
+        subscription.cancelledByCaller = true;
+        final cancelled = sourceSubscription?.cancel();
+        sourceSubscription = null;
+        return cancelled;
+      };
+    return controller.stream;
   }
 
   @override
@@ -775,4 +810,14 @@ class MethodChannelICloudStorage extends ICloudStoragePlatform {
             : <String>[additionalIdentifier]),
         '${_eventChannelSessionId}_${_nextEventChannelId++}',
       ].join('/');
+}
+
+/// Tracks whether the caller cancelled a transfer progress subscription.
+///
+/// Native reports a transfer failure through the progress stream's error
+/// channel only while the caller is listening. Once the caller cancels, the
+/// native event sink is gone, so a later failure can arrive only through the
+/// method channel and must not be suppressed.
+class _TransferProgressSubscription {
+  bool cancelledByCaller = false;
 }
