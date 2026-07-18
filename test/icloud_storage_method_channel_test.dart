@@ -985,6 +985,49 @@ void main() {
       expect(receivedErrors, hasLength(1));
       expect(receivedErrors.single, isA<ICloudCoordinationException>());
     });
+
+    test(
+        'propagates a pluginContract failure from a progress-enabled '
+        'transfer', () async {
+      mockStreamHandler = MockStreamHandler.inline(
+        onListen: (arguments, events) {},
+      );
+
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, (methodCall) async {
+        mockMethodCall = methodCall;
+        mockMethodCalls.add(methodCall);
+        if (methodCall.method == 'createEventChannel') {
+          final args = mockArguments();
+          lastEventChannelName = args['eventChannelName'] as String?;
+          if (lastEventChannelName != null && mockStreamHandler != null) {
+            final eventChannel = EventChannel(lastEventChannelName!);
+            TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+                .setMockStreamHandler(eventChannel, mockStreamHandler);
+          }
+          return null;
+        }
+        if (methodCall.method == 'uploadFile') {
+          throw MissingPluginException('not registered');
+        }
+        return null;
+      });
+
+      // A missing plugin is a method-channel contract violation that native
+      // never delivers through the progress stream, so it must surface from
+      // the method Future rather than being demoted to a successful transfer.
+      await expectLater(
+        () => platform.uploadFile(
+          containerId: containerId,
+          localPath: '/dir/file',
+          relativePath: 'dest',
+          onProgress: (stream) {
+            stream.listen((_) {});
+          },
+        ),
+        throwsA(_pluginContractFor('uploadFile')),
+      );
+    });
   });
 
   test('delete', () async {

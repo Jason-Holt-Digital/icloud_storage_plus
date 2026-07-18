@@ -209,6 +209,10 @@ class MethodChannelICloudStorage extends ICloudStoragePlatform {
   /// caller listening with `cancelOnError: true` cancels automatically after
   /// the stream error arrives; that is not an early cancellation, so the
   /// already-delivered failure is not rethrown.
+  ///
+  /// Method-channel contract violations (`pluginContract`, e.g. a missing
+  /// native plugin or a non-null success response) never reach the progress
+  /// stream, so they always propagate rather than being demoted to success.
   Future<void> _invokeTransferMethod(
     String method,
     Map<String, Object?> arguments, {
@@ -220,9 +224,10 @@ class MethodChannelICloudStorage extends ICloudStoragePlatform {
     }
     try {
       await _invokeVoidMethod(method, arguments);
-    } on ICloudOperationException {
-      if (progressSubscription.cancelledByCaller &&
-          !progressSubscription.failureDelivered) {
+    } on ICloudOperationException catch (error) {
+      if (error.category == 'pluginContract' ||
+          (progressSubscription.cancelledByCaller &&
+              !progressSubscription.failureDelivered)) {
         rethrow;
       }
       // Otherwise the failure surfaced on the progress stream's error channel.
