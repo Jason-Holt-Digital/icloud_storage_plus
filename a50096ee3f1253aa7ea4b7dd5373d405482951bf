@@ -1,0 +1,21 @@
+doc/icloud_storage_improvements/00_implementation_overview.md
+  s_86e71e8f67b378::t_96dc09bb6d7c44 30,32-34,36,38-43,68,72-76,83-84
+doc/icloud_storage_improvements/ATTRIBUTIONS.md
+  s_86e71e8f67b378::t_be08579e76a7f1 7-8,12-15,20-31,36,47-48,53-54,60,63,75,89
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.13",
+  "base_commit_sha": "a50096ee3f1253aa7ea4b7dd5373d405482951bf",
+  "prompts": {},
+  "sessions": {
+    "s_86e71e8f67b378": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f5f8d-cd92-7b93-b949-fa8d9a84e852",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Jason Holt <jason@jasonholtdigital.com>"
+    }
+  }
+}

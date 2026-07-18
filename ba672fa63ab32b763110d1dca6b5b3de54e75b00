@@ -1,0 +1,197 @@
+.agents/skills/audit-xcode-security-settings/SKILL.md
+  s_2f16e0e318343c::t_4303eba22ee337 1-217
+.agents/skills/audit-xcode-security-settings/references/additional-settings.md
+  s_2f16e0e318343c::t_ffc527cd3df7b0 1-28
+.agents/skills/audit-xcode-security-settings/references/adoption-strategy.md
+  s_2f16e0e318343c::t_a072193a023364 1-77
+.agents/skills/audit-xcode-security-settings/references/cpp-hardening.md
+  s_2f16e0e318343c::t_2c29f237056797 1-77
+.agents/skills/audit-xcode-security-settings/references/decision-document.md
+  s_2f16e0e318343c::t_eebdad68112f62 1-74
+.agents/skills/audit-xcode-security-settings/references/enhanced-security.md
+  s_2f16e0e318343c::t_d359f2a6491138 1-77
+.agents/skills/audit-xcode-security-settings/references/hardware-memory-tagging.md
+  s_2f16e0e318343c::t_bc7e86b1b77aaf 1-59
+.agents/skills/audit-xcode-security-settings/references/pointer-authentication.md
+  s_2f16e0e318343c::t_9b087879670f18 1-84
+.agents/skills/audit-xcode-security-settings/references/reading-build-settings.md
+  s_2f16e0e318343c::t_a2d9fce162e40e 1-46
+.agents/skills/audit-xcode-security-settings/references/readonly-platform-memory.md
+  s_2f16e0e318343c::t_1f728fb89c3ba9 1-51
+.agents/skills/audit-xcode-security-settings/references/runtime-restrictions.md
+  s_2f16e0e318343c::t_6c40975e17cef8 1-57
+.agents/skills/audit-xcode-security-settings/references/security-compiler-warnings.md
+  s_2f16e0e318343c::t_7b7e49f6821d07 1-78
+.agents/skills/audit-xcode-security-settings/references/settings-and-entitlements-catalog.md
+  s_2f16e0e318343c::t_60e5c5efd70930 1-117
+.agents/skills/audit-xcode-security-settings/references/stack-zero-init.md
+  s_2f16e0e318343c::t_6ceb9947d34e6c 1-47
+.agents/skills/audit-xcode-security-settings/references/typed-allocators.md
+  s_2f16e0e318343c::t_44ee7fe16f8420 1-53
+.agents/skills/audit-xcode-security-settings/scripts/filter_build_settings.py
+  s_2f16e0e318343c::t_21eb1250cc702c 1-68
+.agents/skills/autofix/SKILL.md
+  s_2f16e0e318343c::t_a13ca55b8cb1f0 1-339
+.agents/skills/autofix/github.md
+  s_2f16e0e318343c::t_31e1d017f90e8a 1-145
+.agents/skills/c-bounds-safety/SKILL.md
+  s_2f16e0e318343c::t_0b7e2aef85c221 1-31
+.agents/skills/c-bounds-safety/references/adoption-strategies.md
+  s_2f16e0e318343c::t_ca5034fa051f45 1-524
+.agents/skills/c-bounds-safety/references/build-settings.md
+  s_2f16e0e318343c::t_7116c3c04a4201 1-43
+.agents/skills/c-bounds-safety/references/common-patterns-and-pitfalls.md
+  s_2f16e0e318343c::t_a513e48f21a935 1-624
+.agents/skills/c-bounds-safety/references/language-overview.md
+  s_2f16e0e318343c::t_9026df147a996d 1-736
+.agents/skills/c-bounds-safety/references/runtime-debugging.md
+  s_2f16e0e318343c::t_e4b062a65e7e5c 1-261
+.agents/skills/code-review/SKILL.md
+  s_2f16e0e318343c::t_b6eebf2ca2ef78 1-158
+.agents/skills/codebase-design/DEEPENING.md
+  s_2f16e0e318343c::t_c8e25fa4a403a1 1-37
+.agents/skills/codebase-design/DESIGN-IT-TWICE.md
+  s_2f16e0e318343c::t_7bf4097dbf9b3d 1-44
+.agents/skills/codebase-design/SKILL.md
+  s_2f16e0e318343c::t_2a753d38183b30 1-114
+.agents/skills/device-interaction/SKILL.md
+  s_2f16e0e318343c::t_608332ce03bcc9 1-133
+.agents/skills/diagnosing-bugs/SKILL.md
+  s_2f16e0e318343c::t_1bb0166426ed1a 1-134
+.agents/skills/diagnosing-bugs/scripts/hitl-loop.template.sh
+  s_2f16e0e318343c::t_d53e482dfb0033 1-41
+.agents/skills/domain-modeling/ADR-FORMAT.md
+  s_2f16e0e318343c::t_e5ce11673c3b42 1-47
+.agents/skills/domain-modeling/CONTEXT-FORMAT.md
+  s_2f16e0e318343c::t_3bad4900366ad6 1-60
+.agents/skills/domain-modeling/SKILL.md
+  s_2f16e0e318343c::t_f7e1c2ae944dd5 1-74
+.agents/skills/git-guardrails-claude-code/SKILL.md
+  s_2f16e0e318343c::t_24bf74da195a9a 1-95
+.agents/skills/git-guardrails-claude-code/scripts/block-dangerous-git.sh
+  s_2f16e0e318343c::t_a8edfd6bccd4f2 1-25
+.agents/skills/implement/SKILL.md
+  s_2f16e0e318343c::t_cc5950ce0e656d 1-15
+.agents/skills/improve-codebase-architecture/HTML-REPORT.md
+  s_2f16e0e318343c::t_6206938d9fadcd 1-123
+.agents/skills/improve-codebase-architecture/SKILL.md
+  s_2f16e0e318343c::t_ccbd269a3d2881 1-66
+.agents/skills/migrate-to-shoehorn/SKILL.md
+  s_2f16e0e318343c::t_b65cd605662e94 1-118
+.agents/skills/prototype/LOGIC.md
+  s_2f16e0e318343c::t_b09894699daa45 1-79
+.agents/skills/prototype/SKILL.md
+  s_2f16e0e318343c::t_480198aa608946 1-31
+.agents/skills/prototype/UI.md
+  s_2f16e0e318343c::t_93a20fbf3cd9b8 1-112
+.agents/skills/qa/SKILL.md
+  s_2f16e0e318343c::t_4d19cfda2c8d0b 1-130
+.agents/skills/request-refactor-plan/SKILL.md
+  s_2f16e0e318343c::t_be937a8cc168e6 1-68
+.agents/skills/resolving-merge-conflicts/SKILL.md
+  s_2f16e0e318343c::t_430b93030784c0 1-14
+.agents/skills/review/SKILL.md
+  s_2f16e0e318343c::t_fd287161571839 1-69
+.agents/skills/setup-matt-pocock-skills/SKILL.md
+  s_2f16e0e318343c::t_4d64d1d61b0dd3 1-127
+.agents/skills/setup-matt-pocock-skills/domain.md
+  s_2f16e0e318343c::t_eaaa673ac3d4a8 1-51
+.agents/skills/setup-matt-pocock-skills/issue-tracker-github.md
+  s_2f16e0e318343c::t_65e7acf3c5a758 1-34
+.agents/skills/setup-matt-pocock-skills/issue-tracker-gitlab.md
+  s_2f16e0e318343c::t_492ca58d3afeab 1-35
+.agents/skills/setup-matt-pocock-skills/issue-tracker-local.md
+  s_2f16e0e318343c::t_4d71b04b7077d7 1-19
+.agents/skills/setup-matt-pocock-skills/triage-labels.md
+  s_2f16e0e318343c::t_50b829c4915671 1-15
+.agents/skills/setup-pre-commit/SKILL.md
+  s_2f16e0e318343c::t_b17db270bccecd 1-91
+.agents/skills/swiftui-specialist/SKILL.md
+  s_2f16e0e318343c::t_1da0e9bc5d4cd6 1-20
+.agents/skills/swiftui-specialist/references/animations.md
+  s_2f16e0e318343c::t_d00c450c5a17dd 1-83
+.agents/skills/swiftui-specialist/references/dataflow.md
+  s_2f16e0e318343c::t_b5c697b164e9c1 1-756
+.agents/skills/swiftui-specialist/references/environment.md
+  s_2f16e0e318343c::t_2a8bd566c7ffab 1-938
+.agents/skills/swiftui-specialist/references/foreach.md
+  s_2f16e0e318343c::t_f85119f0037e11 1-463
+.agents/skills/swiftui-specialist/references/localization.md
+  s_2f16e0e318343c::t_88ef81aca66fba 1-265
+.agents/skills/swiftui-specialist/references/modifiers.md
+  s_2f16e0e318343c::t_ff93149f47c979 1-35
+.agents/skills/swiftui-specialist/references/soft-deprecated-apis.md
+  s_2f16e0e318343c::t_a1492027b964fe 1-352
+.agents/skills/swiftui-specialist/references/soft-deprecation.md
+  s_2f16e0e318343c::t_ce79b0caa787ba 1-46
+.agents/skills/swiftui-specialist/references/structure.md
+  s_2f16e0e318343c::t_4700f8735fa721 1-310
+.agents/skills/swiftui-whats-new-27/SKILL.md
+  s_2f16e0e318343c::t_7f737f49378508 1-23
+.agents/skills/swiftui-whats-new-27/references/async-image.md
+  s_2f16e0e318343c::t_42e0e97d827744 1-68
+.agents/skills/swiftui-whats-new-27/references/content-builder.md
+  s_2f16e0e318343c::t_e9e7fdff85dd7c 1-404
+.agents/skills/swiftui-whats-new-27/references/deprecations.md
+  s_2f16e0e318343c::t_c8f4a44591a24e 1-45
+.agents/skills/swiftui-whats-new-27/references/document-based-apps.md
+  s_2f16e0e318343c::t_152b2140f019d0 1-530
+.agents/skills/swiftui-whats-new-27/references/item-binding.md
+  s_2f16e0e318343c::t_326b9f5240ed3f 1-99
+.agents/skills/swiftui-whats-new-27/references/reorderable.md
+  s_2f16e0e318343c::t_a4ca8a36df72e1 1-189
+.agents/skills/swiftui-whats-new-27/references/state-macro.md
+  s_2f16e0e318343c::t_b55ec4e3f62e06 1-87
+.agents/skills/swiftui-whats-new-27/references/swipe-actions.md
+  s_2f16e0e318343c::t_14ce0571d231b0 1-65
+.agents/skills/swiftui-whats-new-27/references/toolbar.md
+  s_2f16e0e318343c::t_8a641e80a75a91 1-145
+.agents/skills/tdd/SKILL.md
+  s_2f16e0e318343c::t_00bc1521e7fa37 1-108
+.agents/skills/tdd/mocking.md
+  s_2f16e0e318343c::t_57a9076076dabb 1-59
+.agents/skills/tdd/refactoring.md
+  s_2f16e0e318343c::t_6ed7a8bc5d6b45 1-10
+.agents/skills/tdd/tests.md
+  s_2f16e0e318343c::t_ec180a4f7b6a82 1-61
+.agents/skills/test-modernizer/SKILL.md
+  s_2f16e0e318343c::t_94193233c94519 1-246
+.agents/skills/to-issues/SKILL.md
+  s_2f16e0e318343c::t_e9492338c72e53 1-84
+.agents/skills/to-prd/SKILL.md
+  s_2f16e0e318343c::t_d7308fc5cb1c23 1-75
+.agents/skills/triage/AGENT-BRIEF.md
+  s_2f16e0e318343c::t_d30a6dc1704820 1-207
+.agents/skills/triage/OUT-OF-SCOPE.md
+  s_2f16e0e318343c::t_c53e14b4eea4d4 1-105
+.agents/skills/triage/SKILL.md
+  s_2f16e0e318343c::t_012faf64be35e6 1-112
+.agents/skills/ubiquitous-language/SKILL.md
+  s_2f16e0e318343c::t_8ae1809a497b3a 1-93
+.agents/skills/uikit-app-modernization/SKILL.md
+  s_2f16e0e318343c::t_cb57881d8327a5 1-126
+.agents/skills/uikit-app-modernization/references/orientation-task.md
+  s_2f16e0e318343c::t_7bd8438d7654aa 1-99
+.agents/skills/uikit-app-modernization/references/safe-area-task.md
+  s_2f16e0e318343c::t_2c3f5895f12564 1-87
+.agents/skills/uikit-app-modernization/references/scene-lifecycle-task.md
+  s_2f16e0e318343c::t_0b02c1c1fff37c 1-215
+.agents/skills/uikit-app-modernization/references/uiscreen-task.md
+  s_2f16e0e318343c::t_04fbb934998e3b 1-631
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.3",
+  "base_commit_sha": "ba672fa63ab32b763110d1dca6b5b3de54e75b00",
+  "prompts": {},
+  "sessions": {
+    "s_2f16e0e318343c": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019f1210-c2ff-7ab2-af9f-692b82c013b5",
+        "model": "gpt-5.5"
+      },
+      "human_author": "Jason Holt <jason@jasonholtdigital.com>"
+    }
+  }
+}
