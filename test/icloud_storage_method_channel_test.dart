@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:icloud_storage_plus/icloud_storage_method_channel.dart';
@@ -901,6 +903,87 @@ void main() {
               .having((error) => error.operation, 'operation', 'uploadFile'),
         ),
       );
+    });
+
+    test(
+        'does not rethrow when cancelOnError cancels after a stream failure',
+        () async {
+      mockStreamHandler = MockStreamHandler.inline(
+        onListen: (arguments, events) {
+          events.error(
+            code: _coordinationCode,
+            message: 'Boom',
+            details: {
+              'category': 'coordination',
+              'operation': 'uploadFile',
+              'retryable': false,
+              'relativePath': 'dest',
+            },
+          );
+        },
+      );
+
+      final streamErrorReceived = Completer<void>();
+
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, (methodCall) async {
+        mockMethodCall = methodCall;
+        mockMethodCalls.add(methodCall);
+        if (methodCall.method == 'createEventChannel') {
+          final args = mockArguments();
+          lastEventChannelName = args['eventChannelName'] as String?;
+          if (lastEventChannelName != null && mockStreamHandler != null) {
+            final eventChannel = EventChannel(lastEventChannelName!);
+            TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+                .setMockStreamHandler(eventChannel, mockStreamHandler);
+          }
+          return null;
+        }
+        if (methodCall.method == 'uploadFile') {
+          // Native emits the transfer failure on the event channel before
+          // returning the same method-channel error. Fail the method channel
+          // only after the caller has received the stream error and
+          // cancelOnError has auto-cancelled the subscription.
+          await streamErrorReceived.future;
+          throw PlatformException(
+            code: _coordinationCode,
+            message: 'Boom',
+            details: {
+              'category': 'coordination',
+              'operation': 'uploadFile',
+              'retryable': false,
+              'relativePath': 'dest',
+            },
+          );
+        }
+        return null;
+      });
+
+      final receivedErrors = <Object>[];
+
+      // Automatic cancellation after a delivered stream error must not be
+      // treated as an explicit early cancellation, so the method Future
+      // completes normally instead of rethrowing the same failure.
+      await platform.uploadFile(
+        containerId: containerId,
+        localPath: '/dir/file',
+        relativePath: 'dest',
+        onProgress: (stream) {
+          stream.listen(
+            (_) {},
+            onError: (Object error) {
+              receivedErrors.add(error);
+              if (!streamErrorReceived.isCompleted) {
+                streamErrorReceived.complete();
+              }
+            },
+            cancelOnError: true,
+          );
+        },
+      );
+
+      expect(receivedErrors, hasLength(1));
+      expect(receivedErrors.single, isA<ICloudCoordinationException>());
     });
   });
 

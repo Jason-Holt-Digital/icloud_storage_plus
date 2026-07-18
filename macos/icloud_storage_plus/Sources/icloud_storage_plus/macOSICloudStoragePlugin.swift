@@ -347,21 +347,28 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
       }
     }
 
-    do {
-      try observation.start()
-      result(nil)
-    } catch {
-      registration.cancel()
-      _ = removeDocumentChangeRegistration(
-        eventChannelName,
-        matching: registration
-      )
-      removeStreamHandler(eventChannelName)
-      result(nativeCodeError(
-        error,
-        operation: "watchDocumentChanges",
-        relativePath: relativePath
-      ))
+    // `observation.start()` performs synchronous `NSFileCoordinator`
+    // coordination and an attribute lookup. `resolveContainerURL` delivers
+    // here on the main actor, so run the coordination on a background queue
+    // to avoid blocking the main thread while File Provider/iCloud is slow.
+    DispatchQueue.global(qos: .userInitiated).async {
+      do {
+        try observation.start()
+        DispatchQueue.main.async { result(nil) }
+      } catch {
+        registration.cancel()
+        _ = self.removeDocumentChangeRegistration(
+          eventChannelName,
+          matching: registration
+        )
+        self.removeStreamHandler(eventChannelName)
+        let flutterError = self.nativeCodeError(
+          error,
+          operation: "watchDocumentChanges",
+          relativePath: relativePath
+        )
+        DispatchQueue.main.async { result(flutterError) }
+      }
     }
   }
   

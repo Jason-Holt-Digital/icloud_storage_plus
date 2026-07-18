@@ -202,10 +202,13 @@ class MethodChannelICloudStorage extends ICloudStoragePlatform {
   ///
   /// When a progress stream is attached the native transfer reports failures
   /// through the stream's error channel, so this Future completes normally
-  /// instead of reporting the same failure twice. If the caller has already
-  /// cancelled the progress subscription, native can no longer deliver the
-  /// stream error, so the method-channel failure is the only signal left and
-  /// must propagate.
+  /// instead of reporting the same failure twice. Only when the caller
+  /// explicitly cancelled the progress subscription before any failure was
+  /// delivered can native no longer deliver the stream error, so the
+  /// method-channel failure is the only signal left and must propagate. A
+  /// caller listening with `cancelOnError: true` cancels automatically after
+  /// the stream error arrives; that is not an early cancellation, so the
+  /// already-delivered failure is not rethrown.
   Future<void> _invokeTransferMethod(
     String method,
     Map<String, Object?> arguments, {
@@ -218,7 +221,10 @@ class MethodChannelICloudStorage extends ICloudStoragePlatform {
     try {
       await _invokeVoidMethod(method, arguments);
     } on ICloudOperationException {
-      if (progressSubscription.cancelledByCaller) rethrow;
+      if (progressSubscription.cancelledByCaller &&
+          !progressSubscription.failureDelivered) {
+        rethrow;
+      }
       // Otherwise the failure surfaced on the progress stream's error channel.
     }
   }
@@ -597,7 +603,10 @@ class MethodChannelICloudStorage extends ICloudStoragePlatform {
       ..onListen = () {
         sourceSubscription = source.listen(
           controller.add,
-          onError: controller.addError,
+          onError: (Object error, StackTrace stackTrace) {
+            subscription.failureDelivered = true;
+            controller.addError(error, stackTrace);
+          },
           onDone: controller.close,
         );
       }
@@ -820,4 +829,13 @@ class MethodChannelICloudStorage extends ICloudStoragePlatform {
 /// method channel and must not be suppressed.
 class _TransferProgressSubscription {
   bool cancelledByCaller = false;
+
+  /// Set once a failure has been delivered through the progress stream's
+  /// error channel. A consumer listening with `cancelOnError: true` cancels
+  /// automatically right after receiving that error, which would otherwise
+  /// look like explicit caller cancellation and cause the same failure to be
+  /// rethrown through the method-channel `Future`. This flag lets the method
+  /// call distinguish automatic post-error cancellation from an explicit
+  /// early cancellation.
+  bool failureDelivered = false;
 }
