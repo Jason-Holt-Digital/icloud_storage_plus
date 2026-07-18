@@ -242,6 +242,14 @@ class ICloudDocument: NSDocument {
 
             observation.emit(kind: .invalidation)
         }
+
+        if let coordinationError {
+            DebugHelper.log(
+                "Document change coordination failed: "
+                    + coordinationError.localizedDescription
+            )
+            observation.emit(kind: .invalidation)
+        }
     }
 
     override func presentedItemDidMove(to newURL: URL) {

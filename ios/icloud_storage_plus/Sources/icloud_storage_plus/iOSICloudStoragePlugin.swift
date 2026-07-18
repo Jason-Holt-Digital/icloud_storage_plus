@@ -876,12 +876,12 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
         downloadStreamHandler?.onCancelHandler = {
           [weak self, weak downloadSession] in
           guard let self else { return }
+          // Cancelling the progress stream stops progress monitoring only.
+          // The copy-out is not cancellable, so let readDocumentAt drive the
+          // final result instead of reporting a cancellation while the file
+          // is still being written to localFileURL.
           downloadSession?.cancel()
           self.removeStreamHandler(eventChannelName)
-          completeOnce(self.cancellationError(
-            operation: "downloadFile",
-            relativePath: relativePath
-          ))
         }
       }
 
@@ -2208,20 +2208,6 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
     )
   }
 
-  private func cancellationError(
-    operation: String,
-    relativePath: String? = nil
-  ) -> FlutterError {
-    flutterError(
-      code: "E_CANCEL",
-      message: "Operation cancelled",
-      category: "cancelled",
-      operation: operation,
-      retryable: false,
-      relativePath: relativePath
-    )
-  }
-
   private func containerAccessError(
     operation: String,
     relativePath: String? = nil
@@ -2471,11 +2457,13 @@ private final class EventChannelRegistration {
   }
 
   private func unregisterIfNotListening() {
-    let shouldUnregister = stateQueue.sync {
-      lifecycle != .listening && !unregistered
+    let claimed = stateQueue.sync { () -> Bool in
+      guard lifecycle != .listening && !unregistered else { return false }
+      unregistered = true
+      return true
     }
-    if shouldUnregister {
-      unregister()
+    if claimed {
+      detachStreamHandler()
     }
   }
 
@@ -2487,24 +2475,19 @@ private final class EventChannelRegistration {
   }
 
   private func cancelAcknowledged() {
-    let shouldUnregister = stateQueue.sync {
+    let claimed = stateQueue.sync { () -> Bool in
       lifecycle = .cancelled
-      return unregisterRequested && !unregistered
-    }
-    if shouldUnregister {
-      unregister()
-    }
-  }
-
-  private func unregister() {
-    let shouldUnregister = stateQueue.sync {
-      guard !unregistered else { return false }
+      guard unregisterRequested && !unregistered else { return false }
       unregistered = true
       return true
     }
-    guard shouldUnregister else { return }
+    if claimed {
+      detachStreamHandler()
+    }
+  }
 
-    let unregister = { [eventChannel, weak self] in
+  private func detachStreamHandler() {
+    let detach = { [eventChannel, weak self] in
       eventChannel.setStreamHandler(nil)
       let completion = self?.stateQueue.sync { () -> (() -> Void)? in
         let completion = self?.onUnregistered
@@ -2514,9 +2497,9 @@ private final class EventChannelRegistration {
       completion?()
     }
     if Thread.isMainThread {
-      unregister()
+      detach()
     } else {
-      DispatchQueue.main.async(execute: unregister)
+      DispatchQueue.main.async(execute: detach)
     }
   }
 }
