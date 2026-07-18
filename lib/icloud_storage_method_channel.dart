@@ -180,12 +180,38 @@ class MethodChannelICloudStorage extends ICloudStoragePlatform {
       onProgress(stream);
     }
 
-    await _invokeVoidMethod('uploadFile', {
-      'containerId': containerId,
-      'localFilePath': localPath,
-      'relativePath': relativePath,
-      'eventChannelName': eventChannelName,
-    });
+    await _invokeTransferMethod(
+      'uploadFile',
+      {
+        'containerId': containerId,
+        'localFilePath': localPath,
+        'relativePath': relativePath,
+        'eventChannelName': eventChannelName,
+      },
+      hasProgressListener: onProgress != null,
+    );
+  }
+
+  /// Runs a transfer method call, routing failures to the progress stream
+  /// only when a listener is attached.
+  ///
+  /// When [hasProgressListener] is true the native transfer reports failures
+  /// through the progress stream's error channel, so this Future completes
+  /// normally instead of reporting the same failure twice.
+  Future<void> _invokeTransferMethod(
+    String method,
+    Map<String, Object?> arguments, {
+    required bool hasProgressListener,
+  }) async {
+    if (!hasProgressListener) {
+      await _invokeVoidMethod(method, arguments);
+      return;
+    }
+    try {
+      await _invokeVoidMethod(method, arguments);
+    } on ICloudOperationException {
+      // Failure already surfaced on the progress stream's error channel.
+    }
   }
 
   @override
@@ -211,12 +237,16 @@ class MethodChannelICloudStorage extends ICloudStoragePlatform {
       onProgress(stream);
     }
 
-    await _invokeVoidMethod('downloadFile', {
-      'containerId': containerId,
-      'relativePath': relativePath,
-      'localFilePath': localPath,
-      'eventChannelName': eventChannelName,
-    });
+    await _invokeTransferMethod(
+      'downloadFile',
+      {
+        'containerId': containerId,
+        'relativePath': relativePath,
+        'localFilePath': localPath,
+        'eventChannelName': eventChannelName,
+      },
+      hasProgressListener: onProgress != null,
+    );
   }
 
   @override
@@ -479,6 +509,7 @@ class MethodChannelICloudStorage extends ICloudStoragePlatform {
                   stackTrace,
                 );
               }
+              sink.close();
             },
           ),
         );

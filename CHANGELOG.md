@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [4.0.0] - 2026-07-18
 
 ### Breaking
+
 - Removed `getDocumentMetadata`; use `getItemMetadata` for typed metadata.
 - Removed the public `PlatformExceptionCode` constants. Match typed
   `ICloudOperationException` subclasses and fields instead of transport codes.
@@ -47,6 +48,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   mutations, transfers, and conflict operations.
 
 ### Fixed
+
 - iOS and macOS existing-file content writes now use ordinary write
   coordination (`NSFileCoordinator.WritingOptions` empty) instead of
   replacement-intent (`.forReplacing`) coordination. Complete content is still
@@ -62,6 +64,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   prevents late presenter registration and tears the watcher down exactly once.
 
 ### Documentation
+
 - Clarified that document-change and `gather(onUpdate:)` streams are best-effort
   invalidation/update signals, not real-time or exactly-once change logs.
 - Clarified that watching a missing future path is unsupported.

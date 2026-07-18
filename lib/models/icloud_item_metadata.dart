@@ -8,7 +8,7 @@ class ICloudItemMetadata extends Equatable {
   ICloudItemMetadata.fromMap(Map<dynamic, dynamic> map)
       : relativePath = nativeRequireString(map, 'relativePath'),
         isDirectory = nativeReadBool(map, 'isDirectory'),
-        sizeInBytes = nativeSecondsNumberToInt(
+        sizeInBytes = nativeNumToInt(
           nativeReadNullableNum(map, 'sizeInBytes'),
         ),
         creationDate = nativeSecondsNumberToDateTime(

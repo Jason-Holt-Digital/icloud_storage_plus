@@ -15,7 +15,7 @@ class ICloudFile extends Equatable {
   ICloudFile.fromMap(Map<dynamic, dynamic> map)
       : relativePath = nativeRequireString(map, 'relativePath'),
         isDirectory = nativeReadBool(map, 'isDirectory'),
-        sizeInBytes = nativeSecondsNumberToInt(
+        sizeInBytes = nativeNumToInt(
           nativeReadNullableNum(map, 'sizeInBytes'),
         ),
         creationDate = nativeSecondsNumberToDateTime(

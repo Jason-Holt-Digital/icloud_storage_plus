@@ -35,7 +35,7 @@ Object? _requireValue(Map<dynamic, dynamic> map, String key) {
   return map[key];
 }
 
-int? nativeSecondsNumberToInt(num? value) => value?.toInt();
+int? nativeNumToInt(num? value) => value?.toInt();
 
 DateTime? nativeSecondsNumberToDateTime(num? value) => value == null
     ? null

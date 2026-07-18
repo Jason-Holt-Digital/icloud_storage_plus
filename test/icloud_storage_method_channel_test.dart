@@ -253,7 +253,10 @@ void main() {
 
       await expectLater(
         updateStream,
-        emitsError(isA<ICloudContainerAccessException>()),
+        emitsInOrder([
+          emitsError(isA<ICloudContainerAccessException>()),
+          emitsDone,
+        ]),
       );
     });
 
@@ -778,6 +781,72 @@ void main() {
       expect(events[0].percent, 0.1);
       expect(events[1].isDone, isTrue);
     });
+
+    test(
+        'progress-enabled transfer reports failure through the stream only',
+        () async {
+      mockStreamHandler = MockStreamHandler.inline(
+        onListen: (arguments, events) {
+          events.error(
+            code: _coordinationCode,
+            message: 'Boom',
+            details: {
+              'category': 'coordination',
+              'operation': 'uploadFile',
+              'retryable': false,
+              'relativePath': 'dest',
+            },
+          );
+        },
+      );
+
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, (methodCall) async {
+        mockMethodCall = methodCall;
+        mockMethodCalls.add(methodCall);
+        if (methodCall.method == 'createEventChannel') {
+          final args = mockArguments();
+          lastEventChannelName = args['eventChannelName'] as String?;
+          if (lastEventChannelName != null && mockStreamHandler != null) {
+            final eventChannel = EventChannel(lastEventChannelName!);
+            TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+                .setMockStreamHandler(eventChannel, mockStreamHandler);
+          }
+          return null;
+        }
+        if (methodCall.method == 'uploadFile') {
+          throw PlatformException(
+            code: _coordinationCode,
+            message: 'Boom',
+            details: {
+              'category': 'coordination',
+              'operation': 'uploadFile',
+              'retryable': false,
+              'relativePath': 'dest',
+            },
+          );
+        }
+        return null;
+      });
+
+      late Stream<ICloudTransferProgress> progressStream;
+
+      // The method Future must complete normally when a progress listener is
+      // attached; the failure surfaces on the stream, not on both channels.
+      await platform.uploadFile(
+        containerId: containerId,
+        localPath: '/dir/file',
+        relativePath: 'dest',
+        onProgress: (stream) {
+          progressStream = stream;
+        },
+      );
+
+      await expectLater(
+        progressStream,
+        emitsError(isA<ICloudCoordinationException>()),
+      );
+    });
   });
 
   test('delete', () async {
@@ -1068,7 +1137,10 @@ void main() {
 
       await expectLater(
         changeStream,
-        emitsError(isA<ICloudCoordinationException>()),
+        emitsInOrder([
+          emitsError(isA<ICloudCoordinationException>()),
+          emitsDone,
+        ]),
       );
     });
 
