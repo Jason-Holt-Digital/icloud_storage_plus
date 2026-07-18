@@ -16,8 +16,9 @@ ICloudOperationException decodePlatformException(PlatformException error) {
   final nativeCode = _readInt(payload, 'nativeCode');
   final nativeDescription = _readString(payload, 'nativeDescription');
   final underlying = payload['underlying'];
+  final category = _readString(payload, 'category');
 
-  return switch (_readString(payload, 'category')) {
+  return switch (category) {
     'itemNotFound' => ICloudItemNotFoundException(
         operation: operation,
         retryable: retryable,
@@ -73,7 +74,19 @@ ICloudOperationException decodePlatformException(PlatformException error) {
         nativeDescription: nativeDescription,
         underlying: underlying,
       ),
-    _ => ICloudUnknownNativeException(
+    null || 'unknownNative' => ICloudUnknownNativeException(
+        operation: operation,
+        retryable: retryable,
+        message: message,
+        relativePath: relativePath,
+        pathKind: pathKind,
+        nativeDomain: nativeDomain,
+        nativeCode: nativeCode,
+        nativeDescription: nativeDescription,
+        underlying: underlying,
+      ),
+    final String otherCategory => ICloudOperationException(
+        category: otherCategory,
         operation: operation,
         retryable: retryable,
         message: message,

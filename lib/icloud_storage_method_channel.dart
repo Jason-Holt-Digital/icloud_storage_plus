@@ -461,7 +461,9 @@ class MethodChannelICloudStorage extends ICloudStoragePlatform {
               try {
                 sink.add(mapEvent(event));
               } on Object catch (error, stackTrace) {
-                sink.addError(error, stackTrace);
+                sink
+                  ..addError(error, stackTrace)
+                  ..close();
               }
             },
             handleError: (error, stackTrace, sink) {

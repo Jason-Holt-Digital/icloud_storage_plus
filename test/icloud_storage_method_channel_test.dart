@@ -274,15 +274,18 @@ void main() {
 
       await expectLater(
         updateStream,
-        emitsError(
-          isA<ICloudOperationException>()
-              .having(
-                (error) => error.category,
-                'category',
-                'pluginContract',
-              )
-              .having((error) => error.operation, 'operation', 'gather'),
-        ),
+        emitsInOrder([
+          emitsError(
+            isA<ICloudOperationException>()
+                .having(
+                  (error) => error.category,
+                  'category',
+                  'pluginContract',
+                )
+                .having((error) => error.operation, 'operation', 'gather'),
+          ),
+          emitsDone,
+        ]),
       );
     });
 
@@ -1143,19 +1146,22 @@ void main() {
 
       await expectLater(
         changeStream,
-        emitsError(
-          isA<ICloudOperationException>()
-              .having(
-                (error) => error.category,
-                'category',
-                'pluginContract',
-              )
-              .having(
-                (error) => error.operation,
-                'operation',
-                'watchDocumentChanges',
-              ),
-        ),
+        emitsInOrder([
+          emitsError(
+            isA<ICloudOperationException>()
+                .having(
+                  (error) => error.category,
+                  'category',
+                  'pluginContract',
+                )
+                .having(
+                  (error) => error.operation,
+                  'operation',
+                  'watchDocumentChanges',
+                ),
+          ),
+          emitsDone,
+        ]),
       );
     });
 
@@ -1378,6 +1384,37 @@ void main() {
           'operation',
           'icloudAvailable',
         ),
+      ),
+    );
+  });
+
+  test('unmodeled native categories preserve their category', () async {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (methodCall) async {
+      if (methodCall.method == 'icloudAvailable') {
+        throw PlatformException(
+          code: _nativeCodeError,
+          message: 'Download cancelled',
+          details: {
+            'category': 'cancelled',
+            'operation': 'icloudAvailable',
+            'retryable': false,
+          },
+        );
+      }
+      return null;
+    });
+
+    await expectLater(
+      platform.icloudAvailable,
+      throwsA(
+        isA<ICloudOperationException>()
+            .having((error) => error.category, 'category', 'cancelled')
+            .having(
+              (error) => error is ICloudUnknownNativeException,
+              'is ICloudUnknownNativeException',
+              isFalse,
+            ),
       ),
     );
   });
