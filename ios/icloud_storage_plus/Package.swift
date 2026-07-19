@@ -25,7 +25,9 @@ let package = Package(
                 "icloud_storage_plus_foundation/Placeholder.swift",
             ],
             sources: [
-                "icloud_storage_plus",
+                "icloud_storage_plus/FileWriteHelpers.swift",
+                "icloud_storage_plus/ICloudDocument.swift",
+                "icloud_storage_plus/iOSICloudStoragePlugin.swift",
                 "icloud_storage_plus_foundation/CoordinatedIO.swift",
                 "icloud_storage_plus_foundation/CoordinatedReplaceWriter.swift",
                 "icloud_storage_plus_foundation/DocumentChangeObservation.swift",
@@ -38,10 +40,7 @@ let package = Package(
                 "icloud_storage_plus_foundation/UbiquitousItemMaterializer.swift",
             ],
             resources: [
-                // If this plugin requires a privacy manifest (e.g. uses required
-                // reason APIs), add `PrivacyInfo.xcprivacy` under
-                // `Sources/icloud_storage_plus/` and uncomment:
-                // .process("PrivacyInfo.xcprivacy"),
+                .process("icloud_storage_plus/PrivacyInfo.xcprivacy"),
             ],
             cSettings: [
                 .headerSearchPath("icloud_storage_plus/include/icloud_storage_plus"),

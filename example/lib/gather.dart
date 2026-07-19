@@ -29,20 +29,33 @@ class _GatherState extends State<Gather> {
       final results = await ICloudStorage.gather(
         containerId: _containerIdController.text,
         onUpdate: (stream) {
-          _updateListener = stream.listen((updatedResult) {
-            setState(() {
-              _files = updatedResult.files.map((e) => e.relativePath).toList();
-            });
-          });
+          _updateListener = stream.listen(
+            (updatedResult) {
+              if (!mounted) return;
+              setState(() {
+                _files =
+                    updatedResult.files.map((e) => e.relativePath).toList();
+              });
+            },
+            onError: (Object error) {
+              if (!mounted) return;
+              setState(() {
+                _error = getErrorMessage(error);
+                _status = '';
+              });
+            },
+          );
         },
       );
 
+      if (!mounted) return;
       setState(() {
         _status = 'listening';
         _error = null;
         _files = results.files.map((e) => e.relativePath).toList();
       });
     } on Exception catch (ex) {
+      if (!mounted) return;
       setState(() {
         _error = getErrorMessage(ex);
         _status = '';
@@ -52,6 +65,7 @@ class _GatherState extends State<Gather> {
 
   Future<void> _cancel() async {
     await _updateListener?.cancel();
+    if (!mounted) return;
     setState(() {
       _status = '';
     });

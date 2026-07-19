@@ -6,28 +6,20 @@ void main() {
     test('files with identical properties are equal', () {
       final file1 = ICloudFile.fromMap(const {
         'relativePath': 'Documents/test.txt',
-        'isDirectory': false,
         'sizeInBytes': 1024,
         'creationDate': 1609459200.0, // 2021-01-01 00:00:00 UTC
         'contentChangeDate': 1609545600.0, // 2021-01-02 00:00:00 UTC
-        'isDownloading': false,
-        'downloadStatus': 'NSMetadataUbiquitousItemDownloadingStatusCurrent',
-        'isUploading': false,
+        'downloadStatus': 'current',
         'isUploaded': true,
-        'hasUnresolvedConflicts': false,
       });
 
       final file2 = ICloudFile.fromMap(const {
         'relativePath': 'Documents/test.txt',
-        'isDirectory': false,
         'sizeInBytes': 1024,
         'creationDate': 1609459200.0,
         'contentChangeDate': 1609545600.0,
-        'isDownloading': false,
-        'downloadStatus': 'NSMetadataUbiquitousItemDownloadingStatusCurrent',
-        'isUploading': false,
+        'downloadStatus': 'current',
         'isUploaded': true,
-        'hasUnresolvedConflicts': false,
       });
 
       expect(file1, equals(file2));
@@ -37,12 +29,10 @@ void main() {
     test('files with different relativePath are not equal', () {
       final file1 = ICloudFile.fromMap(const {
         'relativePath': 'Documents/test.txt',
-        'isDirectory': false,
       });
 
       final file2 = ICloudFile.fromMap(const {
         'relativePath': 'Documents/other.txt',
-        'isDirectory': false,
       });
 
       expect(file1, isNot(equals(file2)));
@@ -52,7 +42,6 @@ void main() {
     test('files with different isDirectory are not equal', () {
       final file1 = ICloudFile.fromMap(const {
         'relativePath': 'Documents/item',
-        'isDirectory': false,
       });
 
       final file2 = ICloudFile.fromMap(const {
@@ -113,7 +102,6 @@ void main() {
 
       final file2 = ICloudFile.fromMap(const {
         'relativePath': 'test.txt',
-        'isDownloading': false,
       });
 
       expect(file1, isNot(equals(file2)));
@@ -122,12 +110,12 @@ void main() {
     test('files with different downloadStatus are not equal', () {
       final file1 = ICloudFile.fromMap(const {
         'relativePath': 'test.txt',
-        'downloadStatus': 'NSMetadataUbiquitousItemDownloadingStatusCurrent',
+        'downloadStatus': 'current',
       });
 
       final file2 = ICloudFile.fromMap(const {
         'relativePath': 'test.txt',
-        'downloadStatus': 'NSMetadataUbiquitousItemDownloadingStatusDownloaded',
+        'downloadStatus': 'downloaded',
       });
 
       expect(file1, isNot(equals(file2)));
@@ -141,7 +129,6 @@ void main() {
 
       final file2 = ICloudFile.fromMap(const {
         'relativePath': 'test.txt',
-        'isUploading': false,
       });
 
       expect(file1, isNot(equals(file2)));
@@ -155,7 +142,6 @@ void main() {
 
       final file2 = ICloudFile.fromMap(const {
         'relativePath': 'test.txt',
-        'isUploaded': false,
       });
 
       expect(file1, isNot(equals(file2)));
@@ -169,7 +155,6 @@ void main() {
 
       final file2 = ICloudFile.fromMap(const {
         'relativePath': 'test.txt',
-        'hasUnresolvedConflicts': false,
       });
 
       expect(file1, isNot(equals(file2)));
@@ -210,28 +195,20 @@ void main() {
     test('equal files have equal hashCodes', () {
       final file1 = ICloudFile.fromMap(const {
         'relativePath': 'Documents/test.txt',
-        'isDirectory': false,
         'sizeInBytes': 1024,
         'creationDate': 1609459200.0,
         'contentChangeDate': 1609545600.0,
-        'isDownloading': false,
-        'downloadStatus': 'NSMetadataUbiquitousItemDownloadingStatusCurrent',
-        'isUploading': false,
+        'downloadStatus': 'current',
         'isUploaded': true,
-        'hasUnresolvedConflicts': false,
       });
 
       final file2 = ICloudFile.fromMap(const {
         'relativePath': 'Documents/test.txt',
-        'isDirectory': false,
         'sizeInBytes': 1024,
         'creationDate': 1609459200.0,
         'contentChangeDate': 1609545600.0,
-        'isDownloading': false,
-        'downloadStatus': 'NSMetadataUbiquitousItemDownloadingStatusCurrent',
-        'isUploading': false,
+        'downloadStatus': 'current',
         'isUploaded': true,
-        'hasUnresolvedConflicts': false,
       });
 
       expect(file1.hashCode, equals(file2.hashCode));
@@ -400,12 +377,12 @@ void main() {
     test('files with same DownloadStatus.current are equal', () {
       final file1 = ICloudFile.fromMap(const {
         'relativePath': 'test.txt',
-        'downloadStatus': 'NSMetadataUbiquitousItemDownloadingStatusCurrent',
+        'downloadStatus': 'current',
       });
 
       final file2 = ICloudFile.fromMap(const {
         'relativePath': 'test.txt',
-        'downloadStatus': 'NSMetadataUbiquitousItemDownloadingStatusCurrent',
+        'downloadStatus': 'current',
       });
 
       expect(file1, equals(file2));
@@ -416,12 +393,12 @@ void main() {
     test('files with DownloadStatus.current vs downloaded are not equal', () {
       final file1 = ICloudFile.fromMap(const {
         'relativePath': 'test.txt',
-        'downloadStatus': 'NSMetadataUbiquitousItemDownloadingStatusCurrent',
+        'downloadStatus': 'current',
       });
 
       final file2 = ICloudFile.fromMap(const {
         'relativePath': 'test.txt',
-        'downloadStatus': 'NSMetadataUbiquitousItemDownloadingStatusDownloaded',
+        'downloadStatus': 'downloaded',
       });
 
       expect(file1, isNot(equals(file2)));
@@ -433,13 +410,12 @@ void main() {
         () {
       final file1 = ICloudFile.fromMap(const {
         'relativePath': 'test.txt',
-        'downloadStatus': 'NSMetadataUbiquitousItemDownloadingStatusDownloaded',
+        'downloadStatus': 'downloaded',
       });
 
       final file2 = ICloudFile.fromMap(const {
         'relativePath': 'test.txt',
-        'downloadStatus':
-            'NSMetadataUbiquitousItemDownloadingStatusNotDownloaded',
+        'downloadStatus': 'notDownloaded',
       });
 
       expect(file1, isNot(equals(file2)));

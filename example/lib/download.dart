@@ -29,30 +29,30 @@ class _DownloadState extends State<Download> {
 
       await ICloudStorage.downloadFile(
         containerId: _containerIdController.text,
-        cloudRelativePath: _cloudPathController.text,
+        relativePath: _cloudPathController.text,
         localPath: _localPathController.text,
         onProgress: (stream) {
-          _progressListener = stream.listen((event) {
-            setState(() {
-              switch (event.type) {
-                case ICloudTransferProgressType.progress:
-                  _error = null;
-                  _progress =
-                      'Download Progress: ${formatProgressPercent(event.percent)}';
-                  break;
-                case ICloudTransferProgressType.done:
-                  _error = null;
-                  _progress = 'Download Completed';
-                  break;
-                case ICloudTransferProgressType.error:
-                  _progress = null;
-                  _error = getErrorMessage(
-                    event.exception ?? 'Unknown download error',
-                  );
-                  break;
-              }
-            });
-          });
+          _progressListener = stream.listen(
+            (event) {
+              setState(() {
+                switch (event.type) {
+                  case ICloudTransferProgressType.progress:
+                    _error = null;
+                    _progress =
+                        'Download Progress: ${formatProgressPercent(event.percent)}';
+                  case ICloudTransferProgressType.done:
+                    _error = null;
+                    _progress = 'Download Completed';
+                }
+              });
+            },
+            onError: (Object error) {
+              setState(() {
+                _progress = null;
+                _error = getErrorMessage(error);
+              });
+            },
+          );
         },
       );
     } catch (ex) {
@@ -98,7 +98,7 @@ class _DownloadState extends State<Download> {
               TextField(
                 controller: _cloudPathController,
                 decoration: const InputDecoration(
-                  labelText: 'cloudRelativePath',
+                  labelText: 'relativePath',
                 ),
               ),
               TextField(

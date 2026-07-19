@@ -1,5 +1,13 @@
 import Foundation
 
+private final class FilePresenterReference: @unchecked Sendable {
+    let value: NSFilePresenter?
+
+    init(_ value: NSFilePresenter?) {
+        self.value = value
+    }
+}
+
 struct CoordinatedReplaceWriter {
     typealias FileExists = (String) -> Bool
     typealias VerifyDestination = (URL) throws -> Void
@@ -115,78 +123,96 @@ extension CoordinatedReplaceWriter {
         }
     }
 
-    /// Default `coordinateReplace` binding: bridges
-    /// `NSFileCoordinator.coordinate(writingItemAt:)` (synchronous,
-    /// blocking) into the async caller via a single-resume
-    /// `withCheckedThrowingContinuation` running on
-    /// `DispatchQueue.global`. The accessor is sync per Apple's
-    /// contract; no `DispatchSemaphore`, no inner `Task`, no
-    /// cooperative-pool starvation surface.
-    ///
-    /// The DispatchQueue.global hop is what makes this deadlock-free:
-    /// the blocking `coordinate(...)` call waits on a dispatch thread,
-    /// not on a Swift cooperative-pool thread, so even fully-saturated
-    /// concurrent writes cannot starve the cooperative pool.
-    static let liveCoordinateReplace: CoordinateReplace = {
-        destinationURL, accessor in
-        try await withCheckedThrowingContinuation {
-            (continuation: CheckedContinuation<Void, Error>) in
-            DispatchQueue.global(qos: .userInitiated).async {
-                let coordinator = NSFileCoordinator(filePresenter: nil)
-                var coordinationError: NSError?
-                var accessError: Error?
+    /// Bridges synchronous file coordination into the async caller.
+    /// Coordination always runs on a background dispatch queue so a slow
+    /// iCloud/File Provider write never blocks the presenter's operation
+    /// queue (or the main thread). Passing the presenter to
+    /// `NSFileCoordinator` still suppresses self-notifications for
+    /// presenter-owned writes.
+    static func makeLiveCoordinateReplace(
+        filePresenter: NSFilePresenter?
+    ) -> CoordinateReplace {
+        let presenterReference = FilePresenterReference(filePresenter)
+        return { destinationURL, accessor in
+            try await withCheckedThrowingContinuation {
+                (continuation: CheckedContinuation<Void, Error>) in
+                let coordinate: @Sendable () -> Void = {
+                    let coordinator = NSFileCoordinator(
+                        filePresenter: presenterReference.value
+                    )
+                    var coordinationError: NSError?
+                    var accessError: Error?
 
-                coordinator.coordinate(
-                    writingItemAt: destinationURL,
-                    options: .forReplacing,
-                    error: &coordinationError
-                ) { coordinatedURL in
-                    do {
-                        try accessor(coordinatedURL)
-                    } catch {
-                        accessError = error
+                    coordinator.coordinate(
+                        writingItemAt: destinationURL,
+                        options: [],
+                        error: &coordinationError
+                    ) { coordinatedURL in
+                        do {
+                            try accessor(coordinatedURL)
+                        } catch {
+                            accessError = error
+                        }
                     }
+
+                    if let coordinationError {
+                        continuation.resume(throwing: Self.coordinationError(
+                            underlying: coordinationError
+                        ))
+                        return
+                    }
+                    if let accessError {
+                        continuation.resume(throwing: accessError)
+                        return
+                    }
+                    continuation.resume()
                 }
 
-                if let coordinationError {
-                    continuation.resume(throwing: Self.coordinationError(
-                        underlying: coordinationError
-                    ))
-                    return
-                }
-                if let accessError {
-                    continuation.resume(throwing: accessError)
-                    return
-                }
-                continuation.resume()
+                DispatchQueue.global(qos: .userInitiated).async(
+                    execute: coordinate
+                )
             }
         }
     }
 
-    static let live = CoordinatedReplaceWriter(
-        fileExists: { FileManager.default.fileExists(atPath: $0) },
-        verifyDestination: { destinationURL in
-            try verifyOverwriteDestinationIsFile(at: destinationURL)
-        },
-        createReplacementDirectory: { destinationURL in
-            try FileManager.default.url(
-                for: .itemReplacementDirectory,
-                in: .userDomainMask,
-                appropriateFor: destinationURL,
-                create: true
-            )
-        },
-        coordinateReplace: liveCoordinateReplace,
-        replaceItem: { destinationURL, replacementURL in
-            _ = try FileManager.default.replaceItemAt(
-                destinationURL,
-                withItemAt: replacementURL
-            )
-        },
-        removeItem: { url in
-            if FileManager.default.fileExists(atPath: url.path) {
-                try FileManager.default.removeItem(at: url)
-            }
-        }
+    static let liveCoordinateReplace = makeLiveCoordinateReplace(
+        filePresenter: nil
     )
+
+    static func makeLive(
+        filePresenter: NSFilePresenter?,
+        afterSuccessfulReplace: @escaping (URL) -> Void = { _ in }
+    ) -> CoordinatedReplaceWriter {
+        CoordinatedReplaceWriter(
+            fileExists: { FileManager.default.fileExists(atPath: $0) },
+            verifyDestination: { destinationURL in
+                try verifyOverwriteDestinationIsFile(at: destinationURL)
+            },
+            createReplacementDirectory: { destinationURL in
+                try FileManager.default.url(
+                    for: .itemReplacementDirectory,
+                    in: .userDomainMask,
+                    appropriateFor: destinationURL,
+                    create: true
+                )
+            },
+            coordinateReplace: makeLiveCoordinateReplace(
+                filePresenter: filePresenter
+            ),
+            replaceItem: { destinationURL, replacementURL in
+                let resultingURL = try FileManager.default.replaceItemAt(
+                    destinationURL,
+                    withItemAt: replacementURL
+                ) ?? destinationURL
+                afterSuccessfulReplace(resultingURL)
+            },
+            removeItem: { url in
+                if FileManager.default.fileExists(atPath: url.path) {
+                    try FileManager.default.removeItem(at: url)
+                }
+            }
+        )
+    }
+
+    static let live = makeLive(filePresenter: nil)
 }

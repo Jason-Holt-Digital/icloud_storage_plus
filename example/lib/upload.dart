@@ -30,29 +30,29 @@ class _UploadState extends State<Upload> {
       await ICloudStorage.uploadFile(
         containerId: _containerIdController.text,
         localPath: _filePathController.text,
-        cloudRelativePath: _destPathController.text,
+        relativePath: _destPathController.text,
         onProgress: (stream) {
-          _progressListener = stream.listen((event) {
-            setState(() {
-              switch (event.type) {
-                case ICloudTransferProgressType.progress:
-                  _error = null;
-                  _progress =
-                      'Upload Progress: ${formatProgressPercent(event.percent)}';
-                  break;
-                case ICloudTransferProgressType.done:
-                  _error = null;
-                  _progress = 'Upload Completed';
-                  break;
-                case ICloudTransferProgressType.error:
-                  _progress = null;
-                  _error = getErrorMessage(
-                    event.exception ?? 'Unknown upload error',
-                  );
-                  break;
-              }
-            });
-          });
+          _progressListener = stream.listen(
+            (event) {
+              setState(() {
+                switch (event.type) {
+                  case ICloudTransferProgressType.progress:
+                    _error = null;
+                    _progress =
+                        'Upload Progress: ${formatProgressPercent(event.percent)}';
+                  case ICloudTransferProgressType.done:
+                    _error = null;
+                    _progress = 'Upload Completed';
+                }
+              });
+            },
+            onError: (Object error) {
+              setState(() {
+                _progress = null;
+                _error = getErrorMessage(error);
+              });
+            },
+          );
         },
       );
     } catch (ex) {
@@ -104,7 +104,7 @@ class _UploadState extends State<Upload> {
               TextField(
                 controller: _destPathController,
                 decoration: const InputDecoration(
-                  labelText: 'cloudRelativePath',
+                  labelText: 'relativePath',
                 ),
               ),
               const SizedBox(height: 16),

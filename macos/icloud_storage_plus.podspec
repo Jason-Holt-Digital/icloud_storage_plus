@@ -4,13 +4,13 @@
 #
 Pod::Spec.new do |s|
   s.name             = 'icloud_storage_plus'
-  s.version          = '3.0.0'
+  s.version          = '4.0.0'
   s.summary          = 'iCloud document storage for Flutter (iOS/macOS).'
   s.description      = <<-DESC
 Flutter plugin for uploading, downloading, and managing files in an iCloud
 container, with document coordination via UIDocument/NSDocument.
                        DESC
-  s.homepage         = 'https://github.com/kingdomseed/icloud_storage_plus'
+  s.homepage         = 'https://github.com/Jason-Holt-Digital/icloud_storage_plus'
   s.license          = { :type => 'MIT', :file => '../LICENSE' }
   s.author           = 'kingdomseed'
 
@@ -28,6 +28,11 @@ container, with document coordination via UIDocument/NSDocument.
     'icloud_storage_plus/Sources/icloud_storage_plus_foundation/PerPathMutationLane.swift',
     'icloud_storage_plus/Sources/icloud_storage_plus_foundation/UbiquitousItemMaterializer.swift',
   ]
+  s.resource_bundles = {
+    'icloud_storage_plus_privacy' => [
+      'icloud_storage_plus/Sources/icloud_storage_plus/PrivacyInfo.xcprivacy',
+    ],
+  }
   s.dependency 'FlutterMacOS'
 
   s.platform = :osx, '10.15'

@@ -15,11 +15,11 @@ class MockICloudStoragePlatform
   String _moveToRelativePath = '';
   String get moveToRelativePath => _moveToRelativePath;
 
-  String _uploadCloudRelativePath = '';
-  String get uploadCloudRelativePath => _uploadCloudRelativePath;
+  String _uploadRelativePath = '';
+  String get uploadRelativePath => _uploadRelativePath;
 
-  String _downloadCloudRelativePath = '';
-  String get downloadCloudRelativePath => _downloadCloudRelativePath;
+  String _downloadRelativePath = '';
+  String get downloadRelativePath => _downloadRelativePath;
 
   String _downloadLocalPath = '';
   String get downloadLocalPath => _downloadLocalPath;
@@ -27,7 +27,7 @@ class MockICloudStoragePlatform
   String _readInPlaceRelativePath = '';
   String get readInPlaceRelativePath => _readInPlaceRelativePath;
 
-  String? readInPlaceResult = 'contents';
+  String readInPlaceResult = 'contents';
 
   String _writeInPlaceRelativePath = '';
   String get writeInPlaceRelativePath => _writeInPlaceRelativePath;
@@ -36,24 +36,18 @@ class MockICloudStoragePlatform
   String get writeInPlaceContents => _writeInPlaceContents;
 
   bool documentExistsResult = true;
-  Map<String, dynamic>? itemMetadataResult = {
+  ICloudItemMetadata? itemMetadataResult = ICloudItemMetadata.fromMap(const {
     'relativePath': 'Documents/test.pdf',
+    'isDownloading': false,
+    'isUploading': false,
+    'isUploaded': false,
     'isDirectory': false,
     'sizeInBytes': 1024,
     'creationDate': 1638288000.0,
     'contentChangeDate': 1638374400.0,
-    'downloadStatus': 'NSMetadataUbiquitousItemDownloadingStatusCurrent',
+    'downloadStatus': 'current',
     'hasUnresolvedConflicts': false,
-  };
-  Map<String, dynamic>? documentMetadataResult = {
-    'relativePath': 'Documents/test.pdf',
-    'isDirectory': false,
-    'sizeInBytes': 1024,
-    'creationDate': 1638288000.0,
-    'contentChangeDate': 1638374400.0,
-    'downloadStatus': 'NSMetadataUbiquitousItemDownloadingStatusCurrent',
-    'hasUnresolvedConflicts': false,
-  };
+  });
 
   @override
   Future<bool> icloudAvailable() async {
@@ -73,7 +67,7 @@ class MockICloudStoragePlatform
     StreamHandler<GatherResult>? onUpdate,
   }) async {
     _calls.add('gather');
-    return const GatherResult(files: [], invalidEntries: []);
+    return const GatherResult(files: []);
   }
 
   @override
@@ -89,27 +83,27 @@ class MockICloudStoragePlatform
   Future<void> uploadFile({
     required String containerId,
     required String localPath,
-    required String cloudRelativePath,
+    required String relativePath,
     StreamHandler<ICloudTransferProgress>? onProgress,
   }) async {
-    _uploadCloudRelativePath = cloudRelativePath;
+    _uploadRelativePath = relativePath;
     _calls.add('uploadFile');
   }
 
   @override
   Future<void> downloadFile({
     required String containerId,
-    required String cloudRelativePath,
+    required String relativePath,
     required String localPath,
     StreamHandler<ICloudTransferProgress>? onProgress,
   }) async {
-    _downloadCloudRelativePath = cloudRelativePath;
+    _downloadRelativePath = relativePath;
     _downloadLocalPath = localPath;
     _calls.add('downloadFile');
   }
 
   @override
-  Future<String?> readInPlace({
+  Future<String> readInPlace({
     required String containerId,
     required String relativePath,
   }) async {
@@ -119,7 +113,7 @@ class MockICloudStoragePlatform
   }
 
   @override
-  Future<Uint8List?> readInPlaceBytes({
+  Future<Uint8List> readInPlaceBytes({
     required String containerId,
     required String relativePath,
   }) async {
@@ -186,16 +180,7 @@ class MockICloudStoragePlatform
   }
 
   @override
-  Future<Map<String, dynamic>?> getDocumentMetadata({
-    required String containerId,
-    required String relativePath,
-  }) async {
-    _calls.add('getDocumentMetadata');
-    return documentMetadataResult;
-  }
-
-  @override
-  Future<Map<String, dynamic>?> getItemMetadata({
+  Future<ICloudItemMetadata?> getItemMetadata({
     required String containerId,
     required String relativePath,
   }) async {
@@ -245,21 +230,6 @@ class MockICloudStoragePlatform
   }
 }
 
-class LegacyDocumentMetadataPlatform extends ICloudStoragePlatform
-    with MockPlatformInterfaceMixin {
-  @override
-  Future<Map<String, dynamic>?> getDocumentMetadata({
-    required String containerId,
-    required String relativePath,
-  }) async {
-    return {
-      'relativePath': relativePath,
-      'isDirectory': false,
-      'downloadStatus': 'current',
-    };
-  }
-}
-
 void main() {
   final initialPlatform = ICloudStoragePlatform.instance;
 
@@ -270,34 +240,17 @@ void main() {
   test('barrel exports DownloadStatus and ICloudItemMetadata', () {
     final metadata = ICloudItemMetadata.fromMap(const {
       'relativePath': 'Documents/test.pdf',
+      'isDirectory': false,
+      'isDownloading': false,
+      'isUploading': false,
+      'isUploaded': false,
+      'hasUnresolvedConflicts': false,
       'downloadStatus': 'current',
     });
 
     expect(metadata.downloadStatus, DownloadStatus.current);
     expect(metadata.isLocal, isTrue);
   });
-
-  test(
-    'getItemMetadata works with platforms that only override '
-    'getDocumentMetadata',
-    () async {
-      final previousPlatform = ICloudStoragePlatform.instance;
-      ICloudStoragePlatform.instance = LegacyDocumentMetadataPlatform();
-
-      addTearDown(() {
-        ICloudStoragePlatform.instance = previousPlatform;
-      });
-
-      final metadata = await ICloudStorage.getItemMetadata(
-        containerId: 'containerId',
-        relativePath: 'Documents/legacy.txt',
-      );
-
-      expect(metadata, isNotNull);
-      expect(metadata?.relativePath, 'Documents/legacy.txt');
-      expect(metadata?.downloadStatus, DownloadStatus.current);
-    },
-  );
 
   group('ICloudStorage static functions:', () {
     const containerId = 'containerId';
@@ -307,24 +260,18 @@ void main() {
     setUp(() {
       fakePlatform
         ..documentExistsResult = true
-        ..itemMetadataResult = {
+        ..itemMetadataResult = ICloudItemMetadata.fromMap(const {
           'relativePath': 'Documents/test.pdf',
+          'isDownloading': false,
+          'isUploading': false,
+          'isUploaded': false,
           'isDirectory': false,
           'sizeInBytes': 1024,
           'creationDate': 1638288000.0,
           'contentChangeDate': 1638374400.0,
-          'downloadStatus': 'NSMetadataUbiquitousItemDownloadingStatusCurrent',
+          'downloadStatus': 'current',
           'hasUnresolvedConflicts': false,
-        }
-        ..documentMetadataResult = {
-          'relativePath': 'Documents/test.pdf',
-          'isDirectory': false,
-          'sizeInBytes': 1024,
-          'creationDate': 1638288000.0,
-          'contentChangeDate': 1638374400.0,
-          'downloadStatus': 'NSMetadataUbiquitousItemDownloadingStatusCurrent',
-          'hasUnresolvedConflicts': false,
-        }
+        })
         ..readInPlaceResult = 'contents'
         ..listContentsResult = [];
     });
@@ -332,7 +279,6 @@ void main() {
     test('gather', () async {
       final result = await ICloudStorage.gather(containerId: containerId);
       expect(result.files, isEmpty);
-      expect(result.invalidEntries, isEmpty);
     });
 
     test('watchDocumentChanges', () async {
@@ -384,18 +330,18 @@ void main() {
         await ICloudStorage.uploadFile(
           containerId: containerId,
           localPath: '/dir/file',
-          cloudRelativePath: 'dest',
+          relativePath: 'dest',
         );
-        expect(fakePlatform.uploadCloudRelativePath, 'dest');
+        expect(fakePlatform.uploadRelativePath, 'dest');
         expect(fakePlatform.calls.last, 'uploadFile');
       });
 
-      test('uploadFile rejects trailing slash cloudRelativePath', () async {
+      test('uploadFile rejects trailing slash relativePath', () async {
         expect(
           () async => ICloudStorage.uploadFile(
             containerId: containerId,
             localPath: '/dir/file',
-            cloudRelativePath: 'Documents/folder/',
+            relativePath: 'Documents/folder/',
           ),
           throwsA(isA<InvalidArgumentException>()),
         );
@@ -406,18 +352,18 @@ void main() {
           () async => ICloudStorage.uploadFile(
             containerId: containerId,
             localPath: '',
-            cloudRelativePath: 'dest',
+            relativePath: 'dest',
           ),
           throwsA(isA<InvalidArgumentException>()),
         );
       });
 
-      test('uploadFile with invalid cloudRelativePath', () async {
+      test('uploadFile with invalid relativePath', () async {
         expect(
           () async => ICloudStorage.uploadFile(
             containerId: containerId,
             localPath: '/dir/file',
-            cloudRelativePath: 'dir//file',
+            relativePath: 'dir//file',
           ),
           throwsA(isA<InvalidArgumentException>()),
         );
@@ -428,19 +374,19 @@ void main() {
       test('downloadFile', () async {
         await ICloudStorage.downloadFile(
           containerId: containerId,
-          cloudRelativePath: 'file',
+          relativePath: 'file',
           localPath: '/tmp/file',
         );
-        expect(fakePlatform.downloadCloudRelativePath, 'file');
+        expect(fakePlatform.downloadRelativePath, 'file');
         expect(fakePlatform.downloadLocalPath, '/tmp/file');
         expect(fakePlatform.calls.last, 'downloadFile');
       });
 
-      test('downloadFile rejects trailing slash cloudRelativePath', () async {
+      test('downloadFile rejects trailing slash relativePath', () async {
         expect(
           () async => ICloudStorage.downloadFile(
             containerId: containerId,
-            cloudRelativePath: 'Documents/folder/',
+            relativePath: 'Documents/folder/',
             localPath: '/tmp/file',
           ),
           throwsA(isA<InvalidArgumentException>()),
@@ -451,18 +397,18 @@ void main() {
         expect(
           () async => ICloudStorage.downloadFile(
             containerId: containerId,
-            cloudRelativePath: 'file',
+            relativePath: 'file',
             localPath: '',
           ),
           throwsA(isA<InvalidArgumentException>()),
         );
       });
 
-      test('downloadFile with invalid cloudRelativePath', () async {
+      test('downloadFile with invalid relativePath', () async {
         expect(
           () async => ICloudStorage.downloadFile(
             containerId: containerId,
-            cloudRelativePath: 'dir//file',
+            relativePath: 'dir//file',
             localPath: '/tmp/file',
           ),
           throwsA(isA<InvalidArgumentException>()),
@@ -652,11 +598,15 @@ void main() {
     });
 
     test('getItemMetadata maps NSURL download status constants', () async {
-      fakePlatform.itemMetadataResult = {
+      fakePlatform.itemMetadataResult = ICloudItemMetadata.fromMap(const {
         'relativePath': 'Documents/test.pdf',
+        'isDownloading': false,
+        'isUploading': false,
+        'isUploaded': false,
+        'hasUnresolvedConflicts': false,
         'isDirectory': false,
-        'downloadStatus': 'NSURLUbiquitousItemDownloadingStatusCurrent',
-      };
+        'downloadStatus': 'current',
+      });
 
       final metadata = await ICloudStorage.getItemMetadata(
         containerId: containerId,
@@ -664,23 +614,6 @@ void main() {
       );
 
       expect(metadata?.downloadStatus, DownloadStatus.current);
-    });
-
-    test('getDocumentMetadata returns raw map without status normalization',
-        () async {
-      final metadata = await ICloudStorage.getDocumentMetadata(
-        containerId: containerId,
-        relativePath: 'Documents/test.pdf',
-      );
-
-      expect(metadata?['relativePath'], 'Documents/test.pdf');
-      expect(
-        metadata?['downloadStatus'],
-        'NSMetadataUbiquitousItemDownloadingStatusCurrent',
-      );
-      expect(metadata?['sizeInBytes'], 1024);
-      expect(metadata?['isDirectory'], isFalse);
-      expect(metadata?['hasUnresolvedConflicts'], isFalse);
     });
 
     group('listContents tests:', () {
@@ -730,6 +663,11 @@ void main() {
       test('ContainerItem.isDownloaded for downloaded status', () {
         final item = ContainerItem.fromMap(const {
           'relativePath': 'file.txt',
+          'isDirectory': false,
+          'isDownloading': false,
+          'isUploading': false,
+          'isUploaded': false,
+          'hasUnresolvedConflicts': false,
           'downloadStatus': 'downloaded',
         });
         expect(item.isDownloaded, isTrue);
@@ -739,6 +677,11 @@ void main() {
       test('ContainerItem.isDownloaded for notDownloaded status', () {
         final item = ContainerItem.fromMap(const {
           'relativePath': 'file.txt',
+          'isDirectory': false,
+          'isDownloading': false,
+          'isUploading': false,
+          'isUploaded': false,
+          'hasUnresolvedConflicts': false,
           'downloadStatus': 'notDownloaded',
         });
         expect(item.isDownloaded, isFalse);
@@ -748,6 +691,11 @@ void main() {
       test('ContainerItem handles null downloadStatus', () {
         final item = ContainerItem.fromMap(const {
           'relativePath': 'file.txt',
+          'isDirectory': false,
+          'isDownloading': false,
+          'isUploading': false,
+          'isUploaded': false,
+          'hasUnresolvedConflicts': false,
         });
         expect(item.downloadStatus, isNull);
         expect(item.isDownloaded, isFalse);

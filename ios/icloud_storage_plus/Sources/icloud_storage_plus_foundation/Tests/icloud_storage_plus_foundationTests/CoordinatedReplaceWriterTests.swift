@@ -46,6 +46,98 @@ private final class LockedCallLog: @unchecked Sendable {
     }
 }
 
+private final class LockedReplacementResult: @unchecked Sendable {
+    private let lock = NSLock()
+    private var _count = 0
+    private var _contents: Data?
+
+    var count: Int {
+        lock.lock(); defer { lock.unlock() }
+        return _count
+    }
+
+    var contents: Data? {
+        lock.lock(); defer { lock.unlock() }
+        return _contents
+    }
+
+    func record(url: URL) {
+        lock.lock()
+        _count += 1
+        _contents = try? Data(contentsOf: url)
+        lock.unlock()
+    }
+}
+
+private final class RecordingFilePresenter: NSObject, NSFilePresenter,
+    @unchecked Sendable
+{
+    let presentedItemURL: URL?
+    let presentedItemOperationQueue: OperationQueue = {
+        let queue = OperationQueue()
+        queue.maxConcurrentOperationCount = 1
+        return queue
+    }()
+
+    private let lock = NSLock()
+    private var _didRelinquishToWriter = false
+    private var _didAccommodateDeletion = false
+    private var _didObserveChange = false
+
+    var didRelinquishToWriter: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return _didRelinquishToWriter
+    }
+
+    var didAccommodateDeletion: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return _didAccommodateDeletion
+    }
+
+    var didObserveChange: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return _didObserveChange
+    }
+
+    init(url: URL) {
+        presentedItemURL = url
+    }
+
+    func relinquishPresentedItem(
+        toWriter writer: @escaping @Sendable (
+            (@Sendable () -> Void)?
+        ) -> Void
+    ) {
+        lock.lock()
+        _didRelinquishToWriter = true
+        lock.unlock()
+        writer(nil)
+    }
+
+    func accommodatePresentedItemDeletion(
+        completionHandler: @escaping @Sendable (Error?) -> Void
+    ) {
+        lock.lock()
+        _didAccommodateDeletion = true
+        lock.unlock()
+        completionHandler(nil)
+    }
+
+    func presentedItemDidChange() {
+        lock.lock()
+        _didObserveChange = true
+        lock.unlock()
+    }
+
+    func drainOperationQueue() async {
+        await withCheckedContinuation { continuation in
+            presentedItemOperationQueue.addBarrierBlock {
+                continuation.resume()
+            }
+        }
+    }
+}
+
 final class CoordinatedReplaceWriterTests: XCTestCase {
     func testProductionSourceIsNotDuplicated() throws {
         let productionPath = #filePath
@@ -96,6 +188,17 @@ final class CoordinatedReplaceWriterTests: XCTestCase {
             helperSource.contains("removeOtherVersionsOfItem"),
             "CoordinatedReplaceWriter must not delete NSFileVersions; "
                 + "conflict policy is app-owned."
+        )
+    }
+
+    func testIOSUploadProgressIgnoresBackgroundLifecycleErrors() throws {
+        let pluginSource = try iOSPluginSource()
+
+        XCTAssertFalse(
+            pluginSource.contains("ubiquitousItemUploadingError"),
+            "copy-in completion must not become a later plugin failure when "
+                + "Apple-owned background iCloud upload lifecycle reports "
+                + "an error."
         )
     }
 
@@ -157,6 +260,58 @@ final class CoordinatedReplaceWriterTests: XCTestCase {
 
         XCTAssertTrue(handled)
         XCTAssertEqual(try String(contentsOf: destinationURL), "new")
+    }
+
+    func testPresenterOwnedLiveWriterUpdatesWithoutSelfNotification() async throws {
+        let temporaryDirectory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: temporaryDirectory) }
+
+        let destinationURL = temporaryDirectory.appendingPathComponent("file.json")
+        try Data("old".utf8).write(to: destinationURL)
+
+        let presenter = RecordingFilePresenter(url: destinationURL)
+        NSFileCoordinator.addFilePresenter(presenter)
+        defer { NSFileCoordinator.removeFilePresenter(presenter) }
+
+        let writer = CoordinatedReplaceWriter.makeLive(filePresenter: presenter)
+        let handled = try await writer.overwriteExistingItem(
+            at: destinationURL
+        ) { replacementURL in
+            try Data("new".utf8).write(to: replacementURL)
+        }
+        await presenter.drainOperationQueue()
+
+        XCTAssertTrue(handled)
+        XCTAssertEqual(
+            try Data(contentsOf: destinationURL),
+            Data("new".utf8)
+        )
+        XCTAssertFalse(presenter.didRelinquishToWriter)
+        XCTAssertFalse(presenter.didAccommodateDeletion)
+        XCTAssertFalse(presenter.didObserveChange)
+    }
+
+    func testSuccessfulReplaceHookObservesFinalBytesOnce() async throws {
+        let temporaryDirectory = try makeTemporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: temporaryDirectory) }
+
+        let destinationURL = temporaryDirectory.appendingPathComponent("file.json")
+        try Data("old".utf8).write(to: destinationURL)
+        let result = LockedReplacementResult()
+        let writer = CoordinatedReplaceWriter.makeLive(
+            filePresenter: nil,
+            afterSuccessfulReplace: { result.record(url: $0) }
+        )
+
+        let handled = try await writer.overwriteExistingItem(
+            at: destinationURL
+        ) { replacementURL in
+            try Data("new".utf8).write(to: replacementURL)
+        }
+
+        XCTAssertTrue(handled)
+        XCTAssertEqual(result.count, 1)
+        XCTAssertEqual(result.contents, Data("new".utf8))
     }
 
     func testLiveWriterRejectsExistingDirectoryDestination() async throws {
@@ -449,7 +604,7 @@ final class CoordinatedReplaceWriterTests: XCTestCase {
 
     /// VAL-MUT-040: a mid-stage replace failure leaves the destination
     /// intact and cleans the staged temp directory.
-    func testAtomicReplaceLeavesDestinationIntactAndCleansTempOnFailure() async throws {
+    func testFailedReplaceLeavesDestinationIntactAndCleansTemp() async throws {
         let temporaryDirectory = try makeTemporaryDirectory()
         defer { try? FileManager.default.removeItem(at: temporaryDirectory) }
 
