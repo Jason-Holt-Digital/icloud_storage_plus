@@ -314,19 +314,14 @@ final class CoordinatedReplaceWriterTests: XCTestCase {
         )
     }
 
-    func testMacOSUploadProgressFailuresReportCloudRelativePath() throws {
+    func testMacOSUploadProgressIgnoresBackgroundLifecycleErrors() throws {
         let pluginSource = try macOSPluginSource()
 
-        XCTAssertTrue(
-            pluginSource.contains(
-                "streamHandler.finish(with: [\n"
-                    + "        nativeCodeError(\n"
-                    + "          error,\n"
-                    + "          operation: \"uploadFile\",\n"
-                    + "          relativePath: relativePath\n"
-            ),
-            "upload progress failures should surface relativePath in "
-                + "the structured error payload."
+        XCTAssertFalse(
+            pluginSource.contains("ubiquitousItemUploadingError"),
+            "copy-in completion must not become a later plugin failure when "
+                + "Apple-owned background iCloud upload lifecycle reports "
+                + "an error."
         )
     }
 

@@ -191,6 +191,17 @@ final class CoordinatedReplaceWriterTests: XCTestCase {
         )
     }
 
+    func testIOSUploadProgressIgnoresBackgroundLifecycleErrors() throws {
+        let pluginSource = try iOSPluginSource()
+
+        XCTAssertFalse(
+            pluginSource.contains("ubiquitousItemUploadingError"),
+            "copy-in completion must not become a later plugin failure when "
+                + "Apple-owned background iCloud upload lifecycle reports "
+                + "an error."
+        )
+    }
+
     func testIOSCopyPropagatesSourceReadCoordinationErrors() throws {
         let pluginSource = try iOSPluginSource()
 

@@ -195,9 +195,19 @@ class MethodChannelICloudStorage extends ICloudStoragePlatform {
     _TransferProgressSubscription? progressSubscription;
 
     if (onProgress != null) {
-      bridge = SynchronousStreamBridge(operation: operation)
-        ..expose(onProgress);
-      if (bridge.isCancelled) bridge = null;
+      final subscription = _TransferProgressSubscription();
+      progressSubscription = subscription;
+      bridge = SynchronousStreamBridge(
+        operation: operation,
+        fallbackErrorWhenPaused: true,
+        sourceErrorHasMethodFallback: _hasTransferMethodFallback,
+        onSourceErrorDelivered: subscription.markFailureDelivered,
+        onSourceErrorFallback: subscription.markFailureFallback,
+      )..expose(onProgress);
+      if (bridge.isCancelled) {
+        bridge = null;
+        progressSubscription = null;
+      }
     }
 
     try {
@@ -207,11 +217,10 @@ class MethodChannelICloudStorage extends ICloudStoragePlatform {
           'createEventChannel',
           {'eventChannelName': eventChannelName},
         );
-        progressSubscription = _TransferProgressSubscription();
         await bridge.attach(
           _receiveTransferProgressStream(
             EventChannel(eventChannelName),
-            progressSubscription,
+            progressSubscription!,
           ),
         );
       }
@@ -244,12 +253,12 @@ class MethodChannelICloudStorage extends ICloudStoragePlatform {
     try {
       await _invokeVoidMethod(method, arguments);
     } on ICloudOperationException catch (error) {
-      if (error.category == 'pluginContract' ||
-          (progressSubscription.cancelledByCaller &&
-              !progressSubscription.failureDelivered)) {
-        rethrow;
-      }
-      // Otherwise the failure surfaced on the progress stream's error channel.
+      if (error.category == 'pluginContract') rethrow;
+
+      final delivered = progressSubscription.failureDelivered ||
+          await progressSubscription.failureDisposition;
+      if (!delivered) rethrow;
+      // The same failure reached the active progress stream first.
     }
   }
 
@@ -519,6 +528,9 @@ class MethodChannelICloudStorage extends ICloudStoragePlatform {
         );
   }
 
+  bool _hasTransferMethodFallback(Object error) =>
+      error is ICloudOperationException && error.category != 'pluginContract';
+
   /// Creates a progress stream backed by the native event channel.
   ///
   /// The stream subscribes lazily when a listener attaches. Callers should
@@ -580,21 +592,22 @@ class MethodChannelICloudStorage extends ICloudStoragePlatform {
     );
 
     final source = eventChannel.receiveBroadcastStream().transform(transformer);
-    final controller = StreamController<ICloudTransferProgress>.broadcast();
+    final controller =
+        StreamController<ICloudTransferProgress>.broadcast(sync: true);
     StreamSubscription<ICloudTransferProgress>? sourceSubscription;
     controller
       ..onListen = () {
         sourceSubscription = source.listen(
           controller.add,
-          onError: (Object error, StackTrace stackTrace) {
-            subscription.failureDelivered = true;
-            controller.addError(error, stackTrace);
+          onError: controller.addError,
+          onDone: () {
+            subscription.markStreamDone();
+            unawaited(controller.close());
           },
-          onDone: controller.close,
         );
       }
       ..onCancel = () {
-        subscription.cancelledByCaller = true;
+        subscription.markCancelledByCaller();
         final cancelled = sourceSubscription?.cancel();
         sourceSubscription = null;
         return cancelled;
@@ -811,14 +824,35 @@ class MethodChannelICloudStorage extends ICloudStoragePlatform {
 /// native event sink is gone, so a later failure can arrive only through the
 /// method channel and must not be suppressed.
 class _TransferProgressSubscription {
-  bool cancelledByCaller = false;
+  final Completer<bool> _failureDisposition = Completer<bool>();
 
-  /// Set once a failure has been delivered through the progress stream's
-  /// error channel. A consumer listening with `cancelOnError: true` cancels
-  /// automatically right after receiving that error, which would otherwise
-  /// look like explicit caller cancellation and cause the same failure to be
-  /// rethrown through the method-channel `Future`. This flag lets the method
-  /// call distinguish automatic post-error cancellation from an explicit
-  /// early cancellation.
   bool failureDelivered = false;
+
+  /// Resolves whether the progress stream accepted the transfer failure before
+  /// the caller cancelled. The method-channel fallback waits for this decision
+  /// when its error races ahead of the event-channel terminal event.
+  Future<bool> get failureDisposition => _failureDisposition.future;
+
+  void markFailureDelivered() {
+    if (_failureDisposition.isCompleted) return;
+    failureDelivered = true;
+    _failureDisposition.complete(true);
+  }
+
+  void markFailureFallback() {
+    if (_failureDisposition.isCompleted) return;
+    _failureDisposition.complete(false);
+  }
+
+  void markCancelledByCaller() {
+    if (!failureDelivered && !_failureDisposition.isCompleted) {
+      _failureDisposition.complete(false);
+    }
+  }
+
+  void markStreamDone() {
+    if (!_failureDisposition.isCompleted) {
+      _failureDisposition.complete(false);
+    }
+  }
 }

@@ -110,7 +110,9 @@ abstract class ICloudStoragePlatform extends PlatformInterface {
   /// It must attach a listener synchronously inside the callback. The stream
   /// emits progress and terminal `done` data events. Canceling the
   /// subscription stops progress observation, not the transfer. Failures use
-  /// the stream error channel with typed `ICloudOperationException` values.
+  /// the stream error channel with typed `ICloudOperationException` values. If
+  /// the listener is paused when a native transfer failure arrives, or canceled
+  /// before delivery, the returned Future carries that failure instead.
   ///
   /// The returned future completes once the copy finishes; iCloud uploads the
   /// file automatically in the background. The local file is not kept in sync.

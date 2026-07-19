@@ -138,7 +138,9 @@ class ICloudStorage {
   /// allocation.
   /// Canceling the progress subscription stops progress observation, not the
   /// transfer. Failures use the stream error channel with typed
-  /// [ICloudOperationException] values.
+  /// [ICloudOperationException] values. If the listener is paused when a native
+  /// transfer failure arrives, or canceled before delivery, the returned Future
+  /// carries that failure instead.
   static Future<void> uploadFile({
     required String containerId,
     required String localPath,
@@ -187,7 +189,9 @@ class ICloudStorage {
   /// allocation.
   /// Canceling the progress subscription stops progress observation, not the
   /// transfer. Failures use the stream error channel with typed
-  /// [ICloudOperationException] values.
+  /// [ICloudOperationException] values. If the listener is paused when a native
+  /// transfer failure arrives, or canceled before delivery, the returned Future
+  /// carries that failure instead.
   static Future<void> downloadFile({
     required String containerId,
     required String relativePath,

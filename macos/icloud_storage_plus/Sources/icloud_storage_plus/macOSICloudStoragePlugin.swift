@@ -160,7 +160,7 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
     operation: String,
     relativePath: String? = nil,
     result: @escaping FlutterResult,
-    onFailure: ((FlutterError) -> Bool)? = nil,
+    onFailure: ((FlutterError) -> Void)? = nil,
     onResolved: @escaping (URL) -> Void
   ) {
     Task { @MainActor [self] in
@@ -171,8 +171,8 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
           operation: operation,
           relativePath: relativePath
         )
-        let deliveredToStream = onFailure?(error) ?? false
-        result(deliveredToStream ? nil : error)
+        onFailure?(error)
+        result(error)
         return
       }
 
@@ -216,7 +216,6 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
         if !eventChannelName.isEmpty {
           self?.removeStreamHandler(eventChannelName)
         }
-        return false
       }
     ) { [self] containerURL in
       startGather(
@@ -286,7 +285,6 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
       result: result,
       onFailure: { [weak self] _ in
         self?.removeStreamHandler(eventChannelName)
-        return false
       }
     ) { [self] containerURL in
       startDocumentChangeObservation(
@@ -633,11 +631,11 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
           operation: "uploadFile",
           relativePath: relativePath
         )
-        let deliveredToStream = failProgressStream(
+        failProgressStream(
           eventChannelName: eventChannelName,
           error: mapped
         )
-        result(deliveredToStream ? nil : mapped)
+        result(mapped)
         return
       }
 
@@ -672,7 +670,6 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
         if !eventChannelName.isEmpty {
           self.setupUploadProgressMonitoring(
             cloudFileURL: cloudFileURL,
-            relativePath: relativePath,
             eventChannelName: eventChannelName
           )
         }
@@ -683,11 +680,11 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
           operation: "uploadFile",
           relativePath: relativePath
         )
-        let deliveredToStream = self.failProgressStream(
+        self.failProgressStream(
           eventChannelName: eventChannelName,
           error: mapped
         )
-        result(deliveredToStream ? nil : mapped)
+        result(mapped)
       }
     }
   }
@@ -695,7 +692,6 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
   /// Starts a metadata query to report upload progress.
   private func setupUploadProgressMonitoring(
     cloudFileURL: URL,
-    relativePath: String,
     eventChannelName: String
   ) {
     let query = NSMetadataQuery.init()
@@ -717,7 +713,6 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
     }
     addUploadObservers(
       session: session,
-      relativePath: relativePath,
       eventChannelName: eventChannelName
     )
 
@@ -727,7 +722,6 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
   /// Adds observers for upload progress updates.
   private func addUploadObservers(
     session: MetadataQuerySession,
-    relativePath: String,
     eventChannelName: String
   ) {
     session.addObserver(
@@ -737,7 +731,6 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
       onUploadQueryNotification(
         session: session,
         query: query,
-        relativePath: relativePath,
         eventChannelName: eventChannelName
       )
     }
@@ -749,7 +742,6 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
       onUploadQueryNotification(
         session: session,
         query: query,
-        relativePath: relativePath,
         eventChannelName: eventChannelName
       )
     }
@@ -759,7 +751,6 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
   private func onUploadQueryNotification(
     session: MetadataQuerySession,
     query: NSMetadataQuery,
-    relativePath: String,
     eventChannelName: String
   ) {
     if session.isCancelled || !query.isStarted {
@@ -769,33 +760,10 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
     if query.results.count == 0 {
       return
     }
-    
+
     guard let fileItem = query.results.first as? NSMetadataItem else { return }
-    guard let fileURL = fileItem.value(forAttribute: NSMetadataItemURLKey) as? URL else { return }
-    guard let fileURLValues = try? fileURL.resourceValues(
-      forKeys: [.ubiquitousItemUploadingErrorKey]
-    ) else { return }
     guard hasStreamHandler(named: eventChannelName) else { return }
-    
-    if let error = fileURLValues.ubiquitousItemUploadingError {
-      guard let streamHandler = registeredStreamHandler(
-        for: eventChannelName
-      ) else {
-        return
-      }
-      streamHandler.finish(with: [
-        nativeCodeError(
-          error,
-          operation: "uploadFile",
-          relativePath: relativePath
-        ),
-        FlutterEndOfEventStream,
-      ])
-      session.cancel()
-      removeStreamHandler(eventChannelName)
-      return
-    }
-    
+
     if let progress = fileItem.value(forAttribute: NSMetadataUbiquitousItemPercentUploadedKey) as? Double {
       emitProgress(progress, eventChannelName: eventChannelName)
       if (progress >= 100) {
@@ -832,7 +800,7 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
         self?.failProgressStream(
           eventChannelName: eventChannelName,
           error: error
-        ) ?? false
+        )
       }
     ) { [self] containerURL in
       DebugHelper.log("containerURL: \(containerURL.path)")
@@ -851,11 +819,11 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
           operation: "downloadFile",
           relativePath: relativePath
         )
-        let deliveredToStream = failProgressStream(
+        failProgressStream(
           eventChannelName: eventChannelName,
           error: mapped
         )
-        result(deliveredToStream ? nil : mapped)
+        result(mapped)
         return
       }
 
@@ -921,13 +889,13 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
             operation: "downloadFile",
             relativePath: relativePath
           )
-          let deliveredToStream = downloadStreamHandler?.finish(with: [
+          downloadStreamHandler?.finish(with: [
             mapped,
             FlutterEndOfEventStream,
-          ]) ?? false
+          ])
           downloadSession?.cancel()
           removeStreamHandler(eventChannelName)
-          completeOnce(deliveredToStream ? nil : mapped)
+          completeOnce(mapped)
           return
         }
 
@@ -2036,18 +2004,15 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
   private func failProgressStream(
     eventChannelName: String,
     error: FlutterError
-  ) -> Bool {
+  ) {
     guard !eventChannelName.isEmpty,
           let streamHandler = registeredStreamHandler(
             for: eventChannelName
           ) else {
-      return false
+      return
     }
-    let delivered = streamHandler.finish(
-      with: [error, FlutterEndOfEventStream]
-    )
+    streamHandler.finish(with: [error, FlutterEndOfEventStream])
     removeStreamHandler(eventChannelName)
-    return delivered
   }
 
   /// Removes a stream handler after the Dart cancellation handshake. A

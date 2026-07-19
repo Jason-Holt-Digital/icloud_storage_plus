@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [4.0.0] - 2026-07-18
+## [4.0.0] - 2026-07-19
 
 ### Breaking
 
@@ -69,6 +69,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   same-path watcher baseline, so matching queued callbacks are suppressed.
 - Canceling a change subscription while native observation is starting now
   prevents late presenter registration and tears the watcher down exactly once.
+- Transfer failures now retain a method-channel fallback; Dart suppresses that
+  duplicate only when an unpaused progress listener accepts the error before
+  cancellation, preventing pause/cancellation races from reporting failed
+  transfers as successful.
+- Upload progress no longer turns Apple-owned background iCloud upload lifecycle
+  errors into plugin operation failures after the local copy-in has succeeded.
 
 ### Documentation
 

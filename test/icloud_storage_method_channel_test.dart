@@ -464,8 +464,14 @@ void main() {
       expect(mockArguments()['eventChannelName'], '');
     });
 
-    test('uploadFile invokes native teardown after allocation cancellation',
+    test('uploadFile invokes event-channel teardown after allocation cancel',
         () async {
+      var streamCancelled = false;
+      mockStreamHandler = MockStreamHandler.inline(
+        onListen: (arguments, events) {},
+        onCancel: (arguments) => streamCancelled = true,
+      );
+
       TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
           .setMockMethodCallHandler(channel, (methodCall) async {
         mockMethodCall = methodCall;
@@ -499,6 +505,7 @@ void main() {
         'createEventChannel',
         'uploadFile',
       ]);
+      expect(streamCancelled, isTrue);
     });
   });
 
@@ -867,6 +874,99 @@ void main() {
       await progressExpectation;
     });
 
+    test('paused source-only errors remain queued on the progress stream',
+        () async {
+      mockStreamHandler = MockStreamHandler.inline(
+        onListen: (arguments, events) {
+          events.success('invalid');
+        },
+      );
+
+      final receivedErrors = <Object>[];
+      final streamDone = Completer<void>();
+      late StreamSubscription<ICloudTransferProgress> subscription;
+      await platform.uploadFile(
+        containerId: containerId,
+        localPath: '/dir/file',
+        relativePath: 'dest',
+        onProgress: (stream) {
+          subscription = stream.listen(
+            (_) {},
+            onError: receivedErrors.add,
+            onDone: streamDone.complete,
+          )..pause();
+        },
+      );
+
+      expect(receivedErrors, isEmpty);
+      subscription.resume();
+      await streamDone.future;
+      expect(receivedErrors.single, _pluginContractFor('transferProgress'));
+      await subscription.cancel();
+    });
+
+    test('a source-only error does not hide a later transfer failure',
+        () async {
+      final sourceErrorReceived = Completer<void>();
+      mockStreamHandler = MockStreamHandler.inline(
+        onListen: (arguments, events) {
+          events.success('invalid');
+        },
+      );
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, (methodCall) async {
+        mockMethodCall = methodCall;
+        mockMethodCalls.add(methodCall);
+        if (methodCall.method == 'createEventChannel') {
+          final args = mockArguments();
+          lastEventChannelName = args['eventChannelName'] as String?;
+          if (lastEventChannelName != null && mockStreamHandler != null) {
+            final eventChannel = EventChannel(lastEventChannelName!);
+            TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+                .setMockStreamHandler(eventChannel, mockStreamHandler);
+          }
+          return null;
+        }
+        if (methodCall.method == 'uploadFile') {
+          await sourceErrorReceived.future;
+          throw PlatformException(
+            code: _coordinationCode,
+            message: 'Boom',
+            details: {
+              'category': 'coordination',
+              'operation': 'uploadFile',
+              'retryable': false,
+              'relativePath': 'dest',
+            },
+          );
+        }
+        return null;
+      });
+
+      final receivedErrors = <Object>[];
+      await expectLater(
+        () => platform.uploadFile(
+          containerId: containerId,
+          localPath: '/dir/file',
+          relativePath: 'dest',
+          onProgress: (stream) {
+            stream.listen(
+              (_) {},
+              onError: (Object error) {
+                receivedErrors.add(error);
+                if (!sourceErrorReceived.isCompleted) {
+                  sourceErrorReceived.complete();
+                }
+              },
+            );
+          },
+        ),
+        throwsA(isA<ICloudCoordinationException>()),
+      );
+
+      expect(receivedErrors.single, _pluginContractFor('transferProgress'));
+    });
+
     test('delivers events after listener attaches', () async {
       mockStreamHandler = MockStreamHandler.inline(
         onListen: (arguments, events) {
@@ -959,9 +1059,153 @@ void main() {
       await progressExpectation;
     });
 
-    test(
-        'propagates transfer failure after the progress subscription is '
-        'cancelled', () async {
+    test('waits for the stream error before suppressing its method fallback',
+        () async {
+      final listenReady = Completer<MockStreamHandlerEventSink>();
+      final transferFailed = Completer<void>();
+      mockStreamHandler = MockStreamHandler.inline(
+        onListen: (arguments, events) => listenReady.complete(events),
+      );
+
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, (methodCall) async {
+        mockMethodCall = methodCall;
+        mockMethodCalls.add(methodCall);
+        if (methodCall.method == 'createEventChannel') {
+          final args = mockArguments();
+          lastEventChannelName = args['eventChannelName'] as String?;
+          if (lastEventChannelName != null && mockStreamHandler != null) {
+            final eventChannel = EventChannel(lastEventChannelName!);
+            TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+                .setMockStreamHandler(eventChannel, mockStreamHandler);
+          }
+          return null;
+        }
+        if (methodCall.method == 'uploadFile') {
+          transferFailed.complete();
+          throw PlatformException(
+            code: _coordinationCode,
+            message: 'Boom',
+            details: {
+              'category': 'coordination',
+              'operation': 'uploadFile',
+              'retryable': false,
+              'relativePath': 'dest',
+            },
+          );
+        }
+        return null;
+      });
+
+      late Future<void> progressExpectation;
+      var transferCompleted = false;
+      final transfer = platform.uploadFile(
+        containerId: containerId,
+        localPath: '/dir/file',
+        relativePath: 'dest',
+        onProgress: (stream) {
+          progressExpectation = expectLater(
+            stream,
+            emitsError(isA<ICloudCoordinationException>()),
+          );
+        },
+      );
+      final completion = transfer.whenComplete(() => transferCompleted = true);
+
+      final events = await listenReady.future;
+      await transferFailed.future;
+      await Future<void>.delayed(Duration.zero);
+      expect(transferCompleted, isFalse);
+
+      events
+        ..error(
+          code: _coordinationCode,
+          message: 'Boom',
+          details: {
+            'category': 'coordination',
+            'operation': 'uploadFile',
+            'retryable': false,
+            'relativePath': 'dest',
+          },
+        )
+        ..endOfStream();
+
+      await completion;
+      await progressExpectation;
+    });
+
+    test('paused progress errors fall back to the transfer Future', () async {
+      final listenReady = Completer<MockStreamHandlerEventSink>();
+      mockStreamHandler = MockStreamHandler.inline(
+        onListen: (arguments, events) => listenReady.complete(events),
+      );
+
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, (methodCall) async {
+        mockMethodCall = methodCall;
+        mockMethodCalls.add(methodCall);
+        if (methodCall.method == 'createEventChannel') {
+          final args = mockArguments();
+          lastEventChannelName = args['eventChannelName'] as String?;
+          if (lastEventChannelName != null && mockStreamHandler != null) {
+            final eventChannel = EventChannel(lastEventChannelName!);
+            TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+                .setMockStreamHandler(eventChannel, mockStreamHandler);
+          }
+          return null;
+        }
+        if (methodCall.method == 'uploadFile') {
+          final events = await listenReady.future;
+          events
+            ..error(
+              code: _coordinationCode,
+              message: 'Boom',
+              details: {
+                'category': 'coordination',
+                'operation': 'uploadFile',
+                'retryable': false,
+                'relativePath': 'dest',
+              },
+            )
+            ..endOfStream();
+          throw PlatformException(
+            code: _coordinationCode,
+            message: 'Boom',
+            details: {
+              'category': 'coordination',
+              'operation': 'uploadFile',
+              'retryable': false,
+              'relativePath': 'dest',
+            },
+          );
+        }
+        return null;
+      });
+
+      final receivedErrors = <Object>[];
+      late StreamSubscription<ICloudTransferProgress> subscription;
+      await expectLater(
+        () => platform.uploadFile(
+          containerId: containerId,
+          localPath: '/dir/file',
+          relativePath: 'dest',
+          onProgress: (stream) {
+            subscription = stream.listen(
+              (_) {},
+              onError: receivedErrors.add,
+            )..pause();
+          },
+        ),
+        throwsA(isA<ICloudCoordinationException>()),
+      );
+
+      expect(receivedErrors, isEmpty);
+      await subscription.cancel();
+    });
+
+    test('propagates transfer failure after in-flight progress cancellation',
+        () async {
+      final transferStarted = Completer<void>();
       mockStreamHandler = MockStreamHandler.inline(
         onListen: (arguments, events) {},
       );
@@ -981,6 +1225,7 @@ void main() {
           return null;
         }
         if (methodCall.method == 'uploadFile') {
+          transferStarted.complete();
           throw PlatformException(
             code: _coordinationCode,
             message: 'Boom',
@@ -995,22 +1240,32 @@ void main() {
         return null;
       });
 
-      // The caller stops monitoring progress while the transfer is still
-      // running, so native can no longer deliver the failure through the
-      // stream. The method-channel failure must not be suppressed.
+      late StreamSubscription<ICloudTransferProgress> subscription;
+      final transfer = platform.uploadFile(
+        containerId: containerId,
+        localPath: '/dir/file',
+        relativePath: 'dest',
+        onProgress: (stream) {
+          subscription = stream.listen((_) {});
+        },
+      );
+
+      await transferStarted.future;
+      await Future<void>.delayed(Duration.zero);
+      await subscription.cancel();
+
+      // Native has acknowledged that stream delivery is no longer possible,
+      // so its method-channel failure remains the transfer's fallback.
       await expectLater(
-        () => platform.uploadFile(
-          containerId: containerId,
-          localPath: '/dir/file',
-          relativePath: 'dest',
-          onProgress: (stream) {
-            unawaited(stream.listen((_) {}).cancel());
-          },
-        ),
+        transfer,
         throwsA(
           isA<ICloudCoordinationException>()
               .having((error) => error.operation, 'operation', 'uploadFile'),
         ),
+      );
+      expect(
+        mockMethodCalls.map((call) => call.method),
+        ['createEventChannel', 'uploadFile'],
       );
     });
 
@@ -2084,6 +2339,17 @@ void main() {
               .setMockStreamHandler(eventChannel, mockStreamHandler);
         }
         return null;
+      }
+      if (methodCall.method == 'downloadFile') {
+        throw PlatformException(
+          code: _nativeCodeError,
+          message: 'Native failure',
+          details: {
+            'category': 'unknownNative',
+            'operation': 'downloadFile',
+            'retryable': false,
+          },
+        );
       }
       return null;
     });

@@ -268,7 +268,10 @@ typed `ICloudOperationException` values.
 Important: attach a listener synchronously inside the `onProgress` callback.
 Delayed or ignored streams are rejected before native event-channel allocation.
 Canceling that listener stops progress observation; it does not cancel the file
-transfer.
+transfer. If the listener is paused when a native transfer failure arrives, or
+canceled before failure delivery, the returned transfer Future completes with
+the typed error
+instead so the failure is not lost.
 
 ```dart
 await ICloudStorage.uploadFile(
