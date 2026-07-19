@@ -1,0 +1,90 @@
+macos/icloud_storage_plus/Sources/icloud_storage_plus/macOSICloudStoragePlugin.swift
+  s_1b171c8d379963::t_8c29c2f847a8c9 163,174-175
+  s_1b171c8d379963::t_f7c89fa19e5631 763,766
+  s_1b171c8d379963::t_33d7f370ea9533 803
+  s_1b171c8d379963::t_3f04b216eb8168 892,895,898
+  s_1b171c8d379963::t_732937a80e65dd 2007,2012,2014
+  s_1b171c8d379963::t_88b5899d0cce0e 634,638,822,826
+  s_1b171c8d379963::t_c69505a0949dd8 683,687
+pubspec.yaml
+  s_1b171c8d379963::t_a85e6c9593f26e 5-6
+lib/icloud_storage.dart
+  s_1b171c8d379963::t_d5e9c386a9fc58 141-142,192-193
+  s_1b171c8d379963::t_ebfaffd23aca82 143,194
+.gitignore
+  s_1b171c8d379963::t_a060b562edd9ff 10
+lib/icloud_storage_method_channel.dart
+  s_1b171c8d379963::t_6d93a237e4be99 836,838-844
+  s_1b171c8d379963::t_c83eb4e6acb4d3 605
+  s_1b171c8d379963::t_75275b334545ff 198-202,206-210
+  s_1b171c8d379963::t_ee42939ae02400 603-604,610
+  s_1b171c8d379963::t_35ad44487a081a 203
+  s_1b171c8d379963::t_2c18c299b83002 204-205
+  s_1b171c8d379963::t_6eadde6e97f535 531-533
+  s_1b171c8d379963::t_7019f8c973cd41 595-596
+  s_1b171c8d379963::t_34655c7be2bb55 827-828,830-835,845-857
+  s_1b171c8d379963::t_cec2896e858e5f 837
+  s_1b171c8d379963::t_34c3e3f0ebc729 223
+  s_1b171c8d379963::t_66b5c0d3a239a1 602
+  s_1b171c8d379963::t_b82e9e21e20644 256-261
+README.md
+  s_1b171c8d379963::t_bddd571889036d 274
+  s_1b171c8d379963::t_dc8d7d88771357 271-273
+.pubignore
+  s_1b171c8d379963::t_c1550bfe09e35a 5
+macos/icloud_storage_plus/Sources/icloud_storage_plus_foundation/Tests/icloud_storage_plus_foundationTests/CoordinatedReplaceWriterTests.swift
+  s_1b171c8d379963::t_5cf212dbb12274 317,320-324
+test/icloud_storage_method_channel_test.dart
+  s_1b171c8d379963::t_b984309b09cbcb 1062-1065,1067-1140,1158-1170,1185-1186,1193-1196,1199-1205
+  s_1b171c8d379963::t_ffee41e61614b0 1268
+  s_1b171c8d379963::t_32f4596781455e 1206-1253,1255-1260,1266-1267,1269
+  s_1b171c8d379963::t_89a6b38318e978 469-471,473-474,508
+  s_1b171c8d379963::t_c30ebc03182391 2343-2353
+  s_1b171c8d379963::t_0c4099fbd41190 877-904,906-969
+  s_1b171c8d379963::t_d8d60941a74911 1254
+  s_1b171c8d379963::t_f0fff9f875e3cf 467,472
+  s_1b171c8d379963::t_bc82f7f5c4f633 905
+lib/src/synchronous_stream_bridge.dart
+  s_1b171c8d379963::t_c904a4b316d0a5 9-11,15,19-20,31-33,42,46
+  s_1b171c8d379963::t_e8726d8a382310 37-41
+  s_1b171c8d379963::t_3f8f1c47ee05e7 79,81,85-86,88,90
+  s_1b171c8d379963::t_2abaf67f4c66b2 84
+  s_1b171c8d379963::t_f83bd7036590e4 13-14
+  s_1b171c8d379963::t_31f8332800bc58 34-36
+  s_1b171c8d379963::t_329bb68bc828af 12
+  s_1b171c8d379963::t_c0c9d36ac38b78 77-78,80,83,89
+  s_1b171c8d379963::t_c049293f9c97e8 82
+CHANGELOG.md
+  s_1b171c8d379963::t_059d10b1d418a8 73-77
+  s_1b171c8d379963::t_86fe899c65dba8 72
+  s_1b171c8d379963::t_5f2101f2637383 10
+ios/icloud_storage_plus/Sources/icloud_storage_plus_foundation/Tests/icloud_storage_plus_foundationTests/CoordinatedReplaceWriterTests.swift
+  s_1b171c8d379963::t_94844a76cd6306 194-204
+ios/icloud_storage_plus/Sources/icloud_storage_plus/iOSICloudStoragePlugin.swift
+  s_1b171c8d379963::t_11fae12d3d7d76 2003,2008,2010
+  s_1b171c8d379963::t_3ba071005eb783 758,761
+  s_1b171c8d379963::t_cdfd043294418d 629,633,817,821
+  s_1b171c8d379963::t_ddd4305d8856a8 678,682
+  s_1b171c8d379963::t_d8d001715dbe80 144,155-156
+  s_1b171c8d379963::t_a4cdb22040d30b 887,890,893
+  s_1b171c8d379963::t_be245592b4e354 798
+lib/icloud_storage_platform_interface.dart
+  s_1b171c8d379963::t_e1a7bd4007eb9e 113
+  s_1b171c8d379963::t_8725175e0acf02 114-115
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "647c5dec7f91c176875b8487a11464e5518242f2",
+  "prompts": {},
+  "sessions": {
+    "s_1b171c8d379963": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3638441f-5955-45ac-8421-f728260a8f4d",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Jason Holt <st199007@stud.uni-stuttgart.de>"
+    }
+  }
+}
