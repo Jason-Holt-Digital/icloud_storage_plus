@@ -25,6 +25,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Renamed `ICloudDocumentChangeKind.remoteChange` and its native wire value to
   `ICloudDocumentChangeKind.invalidation` / `"invalidation"`. Treat it as a
   refresh hint and reread coordinated state.
+- Removed `ICloudDocumentChangeKind.unknown`. Unsupported native wire values now
+  fail the change stream as a plugin-contract violation instead of using a
+  forward-compatibility fallback.
 - Removed `GatherInvalidEntry` and `GatherResult.invalidEntries`; malformed
   gather payloads now fail the whole initial call or update stream.
 - Removed `ICloudStorage.documentsDirectory` and `dataDirectory`. Use the
@@ -38,9 +41,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Future<ICloudItemMetadata?>`; method-channel payloads are decoded exactly
   once by the default platform implementation.
 - Every advertised `ICloudOperationException` subtype now has a public
-  constructor accepting normalized failure fields. The raw `PlatformException`
+  constructor accepting normalized failure fields, including dedicated
+  cancellation and initialization exceptions. The raw `PlatformException`
   mapper is internal to the method-channel implementation and is no longer part
   of the public API.
+- `onUpdate`, `onProgress`, and `onChange` callbacks must attach a stream
+  listener synchronously. Delayed or ignored streams throw
+  `InvalidArgumentException` before native event-channel allocation.
 - Method and list responses now validate channel types explicitly and map
   malformed payloads or missing native plugin implementations to typed
   `pluginContract` exceptions. All `Future<void>` channel operations require a

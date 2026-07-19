@@ -11,6 +11,7 @@ import 'package:icloud_storage_plus/models/icloud_item_metadata.dart';
 import 'package:icloud_storage_plus/models/icloud_version.dart';
 import 'package:icloud_storage_plus/models/transfer_progress.dart';
 import 'package:icloud_storage_plus/src/platform_exception_decoder.dart';
+import 'package:icloud_storage_plus/src/synchronous_stream_bridge.dart';
 import 'package:logging/logging.dart';
 
 /// An implementation of [ICloudStoragePlatform] that uses method channels.
@@ -34,41 +35,47 @@ class MethodChannelICloudStorage extends ICloudStoragePlatform {
     required String containerId,
     StreamHandler<GatherResult>? onUpdate,
   }) async {
-    final eventChannelName = onUpdate == null
-        ? ''
-        : _generateEventChannelName('gather', containerId);
+    var eventChannelName = '';
+    SynchronousStreamBridge<GatherResult>? bridge;
 
     if (onUpdate != null) {
-      await _invokeVoidMethod(
-        'createEventChannel',
-        {'eventChannelName': eventChannelName},
-      );
-
-      final gatherEventChannel = EventChannel(eventChannelName);
-      final stream = _receiveMappedEventStream<GatherResult>(
-        eventChannel: gatherEventChannel,
-        operation: 'gather',
-        mapEvent: (event) {
-          if (event is! List) {
-            throw _channelContractError(
-              operation: 'gather',
-              message: 'Unexpected gather event type: ${event.runtimeType}',
-              underlying: event,
-            );
-          }
-          return _mapFilesFromDynamicList(event, operation: 'gather');
-        },
-      );
-
-      onUpdate(stream);
+      bridge = SynchronousStreamBridge(operation: 'gather')..expose(onUpdate);
     }
 
-    final mapList = await _invokeListMethod<dynamic>('gather', {
-      'containerId': containerId,
-      'eventChannelName': eventChannelName,
-    });
+    try {
+      if (bridge != null && !bridge.isCancelled) {
+        eventChannelName = _generateEventChannelName('gather', containerId);
+        await _invokeVoidMethod(
+          'createEventChannel',
+          {'eventChannelName': eventChannelName},
+        );
+        await bridge.attach(
+          _receiveMappedEventStream<GatherResult>(
+            eventChannel: EventChannel(eventChannelName),
+            operation: 'gather',
+            mapEvent: (event) {
+              if (event is! List) {
+                throw _channelContractError(
+                  operation: 'gather',
+                  message: 'Unexpected gather event type: ${event.runtimeType}',
+                  underlying: event,
+                );
+              }
+              return _mapFilesFromDynamicList(event, operation: 'gather');
+            },
+          ),
+        );
+      }
 
-    return _mapFilesFromDynamicList(mapList, operation: 'gather');
+      final mapList = await _invokeListMethod<dynamic>('gather', {
+        'containerId': containerId,
+        'eventChannelName': eventChannelName,
+      });
+      return _mapFilesFromDynamicList(mapList, operation: 'gather');
+    } catch (error, stackTrace) {
+      await bridge?.fail(error, stackTrace);
+      Error.throwWithStackTrace(error, stackTrace);
+    }
   }
 
   @override
@@ -77,55 +84,37 @@ class MethodChannelICloudStorage extends ICloudStoragePlatform {
     required String relativePath,
     required StreamHandler<ICloudDocumentChange> onChange,
   }) async {
+    final bridge = SynchronousStreamBridge<ICloudDocumentChange>(
+      operation: 'watchDocumentChanges',
+    )..expose(onChange);
+    if (bridge.isCancelled) return;
+
     final eventChannelName = _generateEventChannelName(
       'documentChanges',
       containerId,
       relativePath,
     );
 
-    await _invokeVoidMethod(
-      'createEventChannel',
-      {'eventChannelName': eventChannelName},
-    );
-
-    final eventChannel = EventChannel(eventChannelName);
-    final eventStream = _receiveMappedEventStream<ICloudDocumentChange>(
-      eventChannel: eventChannel,
-      operation: 'watchDocumentChanges',
-      mapEvent: _mapDocumentChangeEvent,
-    );
-
-    StreamSubscription<ICloudDocumentChange>? subscription;
-    late final StreamController<ICloudDocumentChange> controller;
-    controller = StreamController<ICloudDocumentChange>(
-      onListen: () {
-        subscription = eventStream.listen(
-          controller.add,
-          onError: controller.addError,
-          onDone: controller.close,
-        );
-      },
-      onCancel: () async {
-        await subscription?.cancel();
-      },
-    );
-
-    onChange(controller.stream);
-
     try {
+      await _invokeVoidMethod(
+        'createEventChannel',
+        {'eventChannelName': eventChannelName},
+      );
+      await bridge.attach(
+        _receiveMappedEventStream<ICloudDocumentChange>(
+          eventChannel: EventChannel(eventChannelName),
+          operation: 'watchDocumentChanges',
+          mapEvent: _mapDocumentChangeEvent,
+        ),
+      );
+
       await _invokeVoidMethod('watchDocumentChanges', {
         'containerId': containerId,
         'relativePath': relativePath,
         'eventChannelName': eventChannelName,
       });
-    } on PlatformException catch (error, stackTrace) {
-      final mapped = decodePlatformException(error);
-      controller.addError(mapped, stackTrace);
-      unawaited(controller.close());
-      Error.throwWithStackTrace(mapped, stackTrace);
     } catch (error, stackTrace) {
-      controller.addError(error, stackTrace);
-      unawaited(controller.close());
+      await bridge.fail(error, stackTrace);
       Error.throwWithStackTrace(error, stackTrace);
     }
   }
@@ -164,55 +153,85 @@ class MethodChannelICloudStorage extends ICloudStoragePlatform {
     required String relativePath,
     StreamHandler<ICloudTransferProgress>? onProgress,
   }) async {
-    var eventChannelName = '';
-    _TransferProgressSubscription? progressSubscription;
-
-    if (onProgress != null) {
-      eventChannelName = _generateEventChannelName('uploadFile', containerId);
-
-      await _invokeVoidMethod(
-        'createEventChannel',
-        {'eventChannelName': eventChannelName},
-      );
-
-      final uploadEventChannel = EventChannel(eventChannelName);
-      progressSubscription = _TransferProgressSubscription();
-      final stream = _receiveTransferProgressStream(
-        uploadEventChannel,
-        progressSubscription,
-      );
-
-      onProgress(stream);
-    }
-
-    await _invokeTransferMethod(
-      'uploadFile',
-      {
+    await _runTransfer(
+      operation: 'uploadFile',
+      containerId: containerId,
+      onProgress: onProgress,
+      arguments: {
         'containerId': containerId,
         'localFilePath': localPath,
         'relativePath': relativePath,
-        'eventChannelName': eventChannelName,
       },
-      progressSubscription: progressSubscription,
     );
+  }
+
+  @override
+  Future<void> downloadFile({
+    required String containerId,
+    required String relativePath,
+    required String localPath,
+    StreamHandler<ICloudTransferProgress>? onProgress,
+  }) async {
+    await _runTransfer(
+      operation: 'downloadFile',
+      containerId: containerId,
+      onProgress: onProgress,
+      arguments: {
+        'containerId': containerId,
+        'relativePath': relativePath,
+        'localFilePath': localPath,
+      },
+    );
+  }
+
+  Future<void> _runTransfer({
+    required String operation,
+    required String containerId,
+    required Map<String, Object?> arguments,
+    StreamHandler<ICloudTransferProgress>? onProgress,
+  }) async {
+    var eventChannelName = '';
+    SynchronousStreamBridge<ICloudTransferProgress>? bridge;
+    _TransferProgressSubscription? progressSubscription;
+
+    if (onProgress != null) {
+      bridge = SynchronousStreamBridge(operation: operation)
+        ..expose(onProgress);
+      if (bridge.isCancelled) bridge = null;
+    }
+
+    try {
+      if (bridge != null) {
+        eventChannelName = _generateEventChannelName(operation, containerId);
+        await _invokeVoidMethod(
+          'createEventChannel',
+          {'eventChannelName': eventChannelName},
+        );
+        progressSubscription = _TransferProgressSubscription();
+        await bridge.attach(
+          _receiveTransferProgressStream(
+            EventChannel(eventChannelName),
+            progressSubscription,
+          ),
+        );
+      }
+
+      await _invokeTransferMethod(
+        operation,
+        {
+          ...arguments,
+          'eventChannelName': eventChannelName,
+        },
+        progressSubscription: progressSubscription,
+      );
+    } catch (error, stackTrace) {
+      await bridge?.fail(error, stackTrace);
+      Error.throwWithStackTrace(error, stackTrace);
+    }
   }
 
   /// Runs a transfer method call, routing failures to the progress stream
   /// only when it is still delivering to the caller.
-  ///
-  /// When a progress stream is attached the native transfer reports failures
-  /// through the stream's error channel, so this Future completes normally
-  /// instead of reporting the same failure twice. Only when the caller
-  /// explicitly cancelled the progress subscription before any failure was
-  /// delivered can native no longer deliver the stream error, so the
-  /// method-channel failure is the only signal left and must propagate. A
-  /// caller listening with `cancelOnError: true` cancels automatically after
-  /// the stream error arrives; that is not an early cancellation, so the
-  /// already-delivered failure is not rethrown.
-  ///
-  /// Method-channel contract violations (`pluginContract`, e.g. a missing
-  /// native plugin or a non-null success response) never reach the progress
-  /// stream, so they always propagate rather than being demoted to success.
   Future<void> _invokeTransferMethod(
     String method,
     Map<String, Object?> arguments, {
@@ -232,46 +251,6 @@ class MethodChannelICloudStorage extends ICloudStoragePlatform {
       }
       // Otherwise the failure surfaced on the progress stream's error channel.
     }
-  }
-
-  @override
-  Future<void> downloadFile({
-    required String containerId,
-    required String relativePath,
-    required String localPath,
-    StreamHandler<ICloudTransferProgress>? onProgress,
-  }) async {
-    var eventChannelName = '';
-    _TransferProgressSubscription? progressSubscription;
-
-    if (onProgress != null) {
-      eventChannelName = _generateEventChannelName('downloadFile', containerId);
-
-      await _invokeVoidMethod(
-        'createEventChannel',
-        {'eventChannelName': eventChannelName},
-      );
-
-      final downloadEventChannel = EventChannel(eventChannelName);
-      progressSubscription = _TransferProgressSubscription();
-      final stream = _receiveTransferProgressStream(
-        downloadEventChannel,
-        progressSubscription,
-      );
-
-      onProgress(stream);
-    }
-
-    await _invokeTransferMethod(
-      'downloadFile',
-      {
-        'containerId': containerId,
-        'relativePath': relativePath,
-        'localFilePath': localPath,
-        'eventChannelName': eventChannelName,
-      },
-      progressSubscription: progressSubscription,
-    );
   }
 
   @override
@@ -600,8 +579,7 @@ class MethodChannelICloudStorage extends ICloudStoragePlatform {
       },
     );
 
-    final source =
-        eventChannel.receiveBroadcastStream().transform(transformer);
+    final source = eventChannel.receiveBroadcastStream().transform(transformer);
     final controller = StreamController<ICloudTransferProgress>.broadcast();
     StreamSubscription<ICloudTransferProgress>? sourceSubscription;
     controller

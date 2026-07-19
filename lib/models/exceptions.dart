@@ -156,6 +156,38 @@ class ICloudInvalidArgumentException extends ICloudOperationException {
   }) : super(category: 'invalidArgument');
 }
 
+/// Thrown when an iCloud operation is cancelled.
+class ICloudCancelledException extends ICloudOperationException {
+  /// Creates a cancellation exception from normalized failure fields.
+  const ICloudCancelledException({
+    required super.operation,
+    required super.retryable,
+    required super.message,
+    super.relativePath,
+    super.pathKind,
+    super.nativeDomain,
+    super.nativeCode,
+    super.nativeDescription,
+    super.underlying,
+  }) : super(category: 'cancelled');
+}
+
+/// Thrown when the native plugin is not initialized.
+class ICloudInitializationException extends ICloudOperationException {
+  /// Creates an initialization exception from normalized failure fields.
+  const ICloudInitializationException({
+    required super.operation,
+    required super.retryable,
+    required super.message,
+    super.relativePath,
+    super.pathKind,
+    super.nativeDomain,
+    super.nativeCode,
+    super.nativeDescription,
+    super.underlying,
+  }) : super(category: 'initialization');
+}
+
 /// Thrown when native code reports an unknown structured failure.
 class ICloudUnknownNativeException extends ICloudOperationException {
   /// Creates an unknown-native exception from normalized failure fields.

@@ -66,10 +66,7 @@ enum ICloudDocumentChangeKind {
   /// revert. An `editingDisabled` event may therefore be an implementation
   /// artifact of the revert mechanism rather than a genuine editing
   /// restriction imposed by the app or system.
-  editingDisabled('editingDisabled'),
-
-  /// The native payload contained an unsupported kind.
-  unknown('unknown');
+  editingDisabled('editingDisabled');
 
   const ICloudDocumentChangeKind(this.value);
 
@@ -78,12 +75,12 @@ enum ICloudDocumentChangeKind {
 
   /// Parses a native event kind string.
   ///
-  /// Unrecognised values map to [ICloudDocumentChangeKind.unknown] for
-  /// forward-compatibility with new kinds added in future native releases.
+  /// Unsupported wire values violate the plugin contract and throw a
+  /// [FormatException].
   static ICloudDocumentChangeKind fromValue(String value) {
-    return ICloudDocumentChangeKind.values.firstWhere(
-      (kind) => kind.value == value,
-      orElse: () => ICloudDocumentChangeKind.unknown,
-    );
+    for (final kind in ICloudDocumentChangeKind.values) {
+      if (kind.value == value) return kind;
+    }
+    throw FormatException('Unsupported document change kind: $value');
   }
 }

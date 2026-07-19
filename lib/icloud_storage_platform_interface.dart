@@ -52,8 +52,9 @@ abstract class ICloudStoragePlatform extends PlatformInterface {
   /// when the list of files are updated. It won't be triggered when the
   /// function initially returns the list of files.
   ///
-  /// When [onUpdate] is provided, the update stream stays active until the
-  /// subscription is canceled. Callers should dispose listeners when done.
+  /// When [onUpdate] is provided, it must attach a listener synchronously
+  /// inside the callback. The update stream stays active until the subscription
+  /// is canceled. Callers should dispose listeners when done.
   ///
   /// The function returns a [GatherResult] containing the complete parsed file
   /// list. Malformed native entries fail the call or update stream.
@@ -67,8 +68,9 @@ abstract class ICloudStoragePlatform extends PlatformInterface {
   /// Watch invalidation/document-state events for one open document.
   ///
   /// The native implementation reuses the existing `ICloudDocument` presenter.
-  /// It does not create a new presenter type. The stream stays active until
-  /// the Dart subscription is canceled, which tears down native observation.
+  /// It does not create a new presenter type. [onChange] must attach a listener
+  /// synchronously inside the callback. The stream stays active until the Dart
+  /// subscription is canceled, which tears down native observation.
   Future<void> watchDocumentChanges({
     required String containerId,
     required String relativePath,
@@ -105,7 +107,9 @@ abstract class ICloudStoragePlatform extends PlatformInterface {
   /// coordinated through UIDocument/NSDocument (directories are not supported).
   ///
   /// [onProgress] is an optional callback to track the progress of the upload.
-  /// The stream emits progress and terminal `done` data events. Failures use
+  /// It must attach a listener synchronously inside the callback. The stream
+  /// emits progress and terminal `done` data events. Canceling the
+  /// subscription stops progress observation, not the transfer. Failures use
   /// the stream error channel with typed `ICloudOperationException` values.
   ///
   /// The returned future completes once the copy finishes; iCloud uploads the
@@ -130,9 +134,11 @@ abstract class ICloudStoragePlatform extends PlatformInterface {
   /// Trailing slashes are rejected here because transfers are file-centric and
   /// coordinated through UIDocument/NSDocument (directories are not supported).
   ///
-  /// [onProgress] is an optional callback to track download progress. The
-  /// stream emits progress and terminal `done` data events. Failures use the
-  /// stream error channel with typed `ICloudOperationException` values.
+  /// [onProgress] is an optional callback to track download progress. It must
+  /// attach a listener synchronously inside the callback. The stream emits
+  /// progress and terminal `done` data events. Canceling the subscription stops
+  /// progress observation, not the transfer. Failures use the stream error
+  /// channel with typed `ICloudOperationException` values.
   ///
   /// The returned future completes once the copy-out finishes (not when iCloud
   /// completes any background sync). This is not in-place access.

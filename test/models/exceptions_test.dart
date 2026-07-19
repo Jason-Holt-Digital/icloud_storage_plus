@@ -48,6 +48,16 @@ void main() {
           retryable: fields.retryable,
           message: fields.message,
         ),
+        ICloudCancelledException(
+          operation: fields.operation,
+          retryable: fields.retryable,
+          message: fields.message,
+        ),
+        ICloudInitializationException(
+          operation: fields.operation,
+          retryable: fields.retryable,
+          message: fields.message,
+        ),
         ICloudUnknownNativeException(
           operation: fields.operation,
           retryable: fields.retryable,
@@ -61,6 +71,8 @@ void main() {
         'conflict',
         'coordination',
         'invalidArgument',
+        'cancelled',
+        'initialization',
         'unknownNative',
       ]);
     });

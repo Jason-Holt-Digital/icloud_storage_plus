@@ -319,11 +319,11 @@ final class CoordinatedReplaceWriterTests: XCTestCase {
 
         XCTAssertTrue(
             pluginSource.contains(
-                "streamHandler.setEvent(nativeCodeError(\n"
-                    + "        error,\n"
-                    + "        operation: \"uploadFile\",\n"
-                    + "        relativePath: relativePath\n"
-                    + "      ))"
+                "streamHandler.finish(with: [\n"
+                    + "        nativeCodeError(\n"
+                    + "          error,\n"
+                    + "          operation: \"uploadFile\",\n"
+                    + "          relativePath: relativePath\n"
             ),
             "upload progress failures should surface relativePath in "
                 + "the structured error payload."

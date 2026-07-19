@@ -192,7 +192,7 @@ void main() {
     test('gather with update', () async {
       await platform.gather(
         containerId: containerId,
-        onUpdate: (stream) {},
+        onUpdate: (stream) => stream.listen((_) {}),
       );
       final args = mockArguments();
       expect(args['containerId'], containerId);
@@ -201,13 +201,38 @@ void main() {
       expect(eventChannelName, isNotEmpty);
     });
 
+    test('rejects an ignored update stream before native allocation', () async {
+      await expectLater(
+        platform.gather(
+          containerId: containerId,
+          onUpdate: (stream) {},
+        ),
+        throwsA(isA<InvalidArgumentException>()),
+      );
+      expect(mockMethodCalls, isEmpty);
+    });
+
+    test('rejects a delayed update listener before native allocation',
+        () async {
+      late Stream<GatherResult> delayedStream;
+      await expectLater(
+        platform.gather(
+          containerId: containerId,
+          onUpdate: (stream) => delayedStream = stream,
+        ),
+        throwsA(isA<InvalidArgumentException>()),
+      );
+      expect(mockMethodCalls, isEmpty);
+      await delayedStream.drain<void>();
+    });
+
     test('concurrent gathers allocate unique event channel names', () async {
       await Future.wait(
         List.generate(
           200,
           (_) => platform.gather(
             containerId: containerId,
-            onUpdate: (stream) {},
+            onUpdate: (stream) => stream.listen((_) {}),
           ),
         ),
       );
@@ -245,21 +270,18 @@ void main() {
         },
       );
 
-      late Stream<GatherResult> updateStream;
+      late Future<void> updateExpectation;
       await platform.gather(
         containerId: containerId,
         onUpdate: (stream) {
-          updateStream = stream;
+          updateExpectation = expectLater(
+            stream,
+            emitsError(isA<ICloudContainerAccessException>()),
+          );
         },
       );
 
-      await expectLater(
-        updateStream,
-        emitsInOrder([
-          emitsError(isA<ICloudContainerAccessException>()),
-          emitsDone,
-        ]),
-      );
+      await updateExpectation;
     });
 
     test('reports malformed update events as typed contract errors', () async {
@@ -269,29 +291,29 @@ void main() {
         },
       );
 
-      late Stream<GatherResult> updateStream;
+      late Future<void> updateExpectation;
       await platform.gather(
         containerId: containerId,
         onUpdate: (stream) {
-          updateStream = stream;
+          updateExpectation = expectLater(
+            stream,
+            emitsInOrder([
+              emitsError(
+                isA<ICloudOperationException>()
+                    .having(
+                      (error) => error.category,
+                      'category',
+                      'pluginContract',
+                    )
+                    .having((error) => error.operation, 'operation', 'gather'),
+              ),
+              emitsDone,
+            ]),
+          );
         },
       );
 
-      await expectLater(
-        updateStream,
-        emitsInOrder([
-          emitsError(
-            isA<ICloudOperationException>()
-                .having(
-                  (error) => error.category,
-                  'category',
-                  'pluginContract',
-                )
-                .having((error) => error.operation, 'operation', 'gather'),
-          ),
-          emitsDone,
-        ]),
-      );
+      await updateExpectation;
     });
 
     test('rejects a malformed initial entry as a whole-call failure', () async {
@@ -343,16 +365,18 @@ void main() {
         },
       );
 
-      late Stream<GatherResult> updateStream;
+      late Future<void> updateExpectation;
       await platform.gather(
         containerId: containerId,
-        onUpdate: (stream) => updateStream = stream,
+        onUpdate: (stream) {
+          updateExpectation = expectLater(
+            stream,
+            emitsError(_pluginContractFor('gather')),
+          );
+        },
       );
 
-      await expectLater(
-        updateStream,
-        emitsError(_pluginContractFor('gather')),
-      );
+      await updateExpectation;
     });
 
     test('maps structured container access failures', () async {
@@ -405,12 +429,76 @@ void main() {
         containerId: containerId,
         localPath: '/dir/file',
         relativePath: 'dest',
-        onProgress: (stream) => {},
+        onProgress: (stream) => stream.listen((_) {}),
       );
       final args = mockArguments();
       final eventChannelName = args['eventChannelName'] as String?;
       expect(eventChannelName, isNotNull);
       expect(eventChannelName, isNotEmpty);
+    });
+
+    test('uploadFile rejects ignored progress before native allocation',
+        () async {
+      await expectLater(
+        platform.uploadFile(
+          containerId: containerId,
+          localPath: '/dir/file',
+          relativePath: 'dest',
+          onProgress: (stream) {},
+        ),
+        throwsA(isA<InvalidArgumentException>()),
+      );
+      expect(mockMethodCalls, isEmpty);
+    });
+
+    test('uploadFile proceeds without progress after synchronous cancel',
+        () async {
+      await platform.uploadFile(
+        containerId: containerId,
+        localPath: '/dir/file',
+        relativePath: 'dest',
+        onProgress: (stream) => stream.listen((_) {}).cancel(),
+      );
+
+      expect(mockMethodCalls.map((call) => call.method), ['uploadFile']);
+      expect(mockArguments()['eventChannelName'], '');
+    });
+
+    test('uploadFile invokes native teardown after allocation cancellation',
+        () async {
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, (methodCall) async {
+        mockMethodCall = methodCall;
+        mockMethodCalls.add(methodCall);
+        if (methodCall.method == 'createEventChannel') {
+          final args = mockArguments();
+          lastEventChannelName = args['eventChannelName'] as String?;
+          if (lastEventChannelName != null && mockStreamHandler != null) {
+            final eventChannel = EventChannel(lastEventChannelName!);
+            TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+                .setMockStreamHandler(eventChannel, mockStreamHandler);
+          }
+          await Future<void>.delayed(Duration.zero);
+          return null;
+        }
+        return null;
+      });
+
+      late StreamSubscription<ICloudTransferProgress> subscription;
+      await platform.uploadFile(
+        containerId: containerId,
+        localPath: '/dir/file',
+        relativePath: 'dest',
+        onProgress: (stream) {
+          subscription = stream.listen((_) {});
+          scheduleMicrotask(subscription.cancel);
+        },
+      );
+
+      expect(mockMethodCalls.map((call) => call.method), [
+        'createEventChannel',
+        'uploadFile',
+      ]);
     });
   });
 
@@ -434,12 +522,26 @@ void main() {
         containerId: containerId,
         relativePath: 'file',
         localPath: '/tmp/file',
-        onProgress: (stream) => {},
+        onProgress: (stream) => stream.listen((_) {}),
       );
       final args = mockArguments();
       final eventChannelName = args['eventChannelName'] as String?;
       expect(eventChannelName, isNotNull);
       expect(eventChannelName, isNotEmpty);
+    });
+
+    test('downloadFile rejects throwing callback before native allocation',
+        () async {
+      await expectLater(
+        platform.downloadFile(
+          containerId: containerId,
+          relativePath: 'file',
+          localPath: '/tmp/file',
+          onProgress: (stream) => throw StateError('callback failed'),
+        ),
+        throwsStateError,
+      );
+      expect(mockMethodCalls, isEmpty);
     });
   });
 
@@ -670,18 +772,18 @@ void main() {
         },
       );
 
-      late Stream<ICloudTransferProgress> progressStream;
+      late Future<List<ICloudTransferProgress>> progressEvents;
 
       await platform.uploadFile(
         containerId: containerId,
         localPath: '/dir/file',
         relativePath: 'dest',
         onProgress: (stream) {
-          progressStream = stream;
+          progressEvents = stream.toList();
         },
       );
 
-      final events = await progressStream.toList();
+      final events = await progressEvents;
       expect(events, hasLength(3));
       expect(events[0].isProgress, isTrue);
       expect(events[0].percent, 0.25);
@@ -706,25 +808,33 @@ void main() {
         },
       );
 
-      late Stream<ICloudTransferProgress> progressStream;
+      late Future<void> progressExpectation;
 
       await platform.downloadFile(
         containerId: containerId,
         relativePath: 'file',
         localPath: '/tmp/file',
         onProgress: (stream) {
-          progressStream = stream;
+          progressExpectation = expectLater(
+            stream,
+            emitsError(
+              isA<ICloudCoordinationException>()
+                  .having(
+                    (error) => error.operation,
+                    'operation',
+                    'downloadFile',
+                  )
+                  .having(
+                    (error) => error.relativePath,
+                    'relativePath',
+                    'file',
+                  ),
+            ),
+          );
         },
       );
 
-      await expectLater(
-        progressStream,
-        emitsError(
-          isA<ICloudCoordinationException>()
-              .having((error) => error.operation, 'operation', 'downloadFile')
-              .having((error) => error.relativePath, 'relativePath', 'file'),
-        ),
-      );
+      await progressExpectation;
     });
 
     test('reports malformed data as a typed stream error', () async {
@@ -734,27 +844,27 @@ void main() {
         },
       );
 
-      late Stream<ICloudTransferProgress> progressStream;
+      late Future<void> progressExpectation;
 
       await platform.uploadFile(
         containerId: containerId,
         localPath: '/dir/file',
         relativePath: 'dest',
         onProgress: (stream) {
-          progressStream = stream;
+          progressExpectation = expectLater(
+            stream,
+            emitsError(
+              isA<ICloudOperationException>().having(
+                (error) => error.category,
+                'category',
+                'pluginContract',
+              ),
+            ),
+          );
         },
       );
 
-      await expectLater(
-        progressStream,
-        emitsError(
-          isA<ICloudOperationException>().having(
-            (error) => error.category,
-            'category',
-            'pluginContract',
-          ),
-        ),
-      );
+      await progressExpectation;
     });
 
     test('delivers events after listener attaches', () async {
@@ -766,26 +876,25 @@ void main() {
         },
       );
 
-      late Stream<ICloudTransferProgress> progressStream;
+      late Future<List<ICloudTransferProgress>> progressEvents;
 
       await platform.uploadFile(
         containerId: containerId,
         localPath: '/dir/file',
         relativePath: 'dest',
         onProgress: (stream) {
-          progressStream = stream;
+          progressEvents = stream.toList();
         },
       );
 
-      final events = await progressStream.toList();
+      final events = await progressEvents;
       expect(events, hasLength(2));
       expect(events[0].isProgress, isTrue);
       expect(events[0].percent, 0.1);
       expect(events[1].isDone, isTrue);
     });
 
-    test(
-        'progress-enabled transfer reports failure through the stream only',
+    test('progress-enabled transfer reports failure through the stream only',
         () async {
       mockStreamHandler = MockStreamHandler.inline(
         onListen: (arguments, events) {
@@ -831,7 +940,7 @@ void main() {
         return null;
       });
 
-      late Stream<ICloudTransferProgress> progressStream;
+      late Future<void> progressExpectation;
 
       // The method Future must complete normally when a progress listener is
       // attached; the failure surfaces on the stream, not on both channels.
@@ -840,14 +949,14 @@ void main() {
         localPath: '/dir/file',
         relativePath: 'dest',
         onProgress: (stream) {
-          progressStream = stream;
+          progressExpectation = expectLater(
+            stream,
+            emitsError(isA<ICloudCoordinationException>()),
+          );
         },
       );
 
-      await expectLater(
-        progressStream,
-        emitsError(isA<ICloudCoordinationException>()),
-      );
+      await progressExpectation;
     });
 
     test(
@@ -895,7 +1004,7 @@ void main() {
           localPath: '/dir/file',
           relativePath: 'dest',
           onProgress: (stream) {
-            stream.listen((_) {}).cancel();
+            unawaited(stream.listen((_) {}).cancel());
           },
         ),
         throwsA(
@@ -905,8 +1014,7 @@ void main() {
       );
     });
 
-    test(
-        'does not rethrow when cancelOnError cancels after a stream failure',
+    test('does not rethrow when cancelOnError cancels after a stream failure',
         () async {
       mockStreamHandler = MockStreamHandler.inline(
         onListen: (arguments, events) {
@@ -1016,17 +1124,25 @@ void main() {
       // A missing plugin is a method-channel contract violation that native
       // never delivers through the progress stream, so it must surface from
       // the method Future rather than being demoted to a successful transfer.
+      late Future<void> progressExpectation;
       await expectLater(
         () => platform.uploadFile(
           containerId: containerId,
           localPath: '/dir/file',
           relativePath: 'dest',
           onProgress: (stream) {
-            stream.listen((_) {});
+            progressExpectation = expectLater(
+              stream,
+              emitsInOrder([
+                emitsError(_pluginContractFor('uploadFile')),
+                emitsDone,
+              ]),
+            );
           },
         ),
         throwsA(_pluginContractFor('uploadFile')),
       );
+      await progressExpectation;
     });
   });
 
@@ -1144,13 +1260,23 @@ void main() {
         return null;
       });
 
+      late Future<void> updateExpectation;
       await expectLater(
         () => platform.gather(
           containerId: containerId,
-          onUpdate: (stream) {},
+          onUpdate: (stream) {
+            updateExpectation = expectLater(
+              stream,
+              emitsInOrder([
+                emitsError(_pluginContractFor('createEventChannel')),
+                emitsDone,
+              ]),
+            );
+          },
         ),
         throwsA(_pluginContractFor('createEventChannel')),
       );
+      await updateExpectation;
     });
 
     test('copyConflictVersion sends method + args', () async {
@@ -1224,6 +1350,19 @@ void main() {
   });
 
   group('document change stream tests:', () {
+    test('watchDocumentChanges rejects ignored stream before native allocation',
+        () async {
+      await expectLater(
+        platform.watchDocumentChanges(
+          containerId: containerId,
+          relativePath: 'Documents/journal.json',
+          onChange: (stream) {},
+        ),
+        throwsA(isA<InvalidArgumentException>()),
+      );
+      expect(mockMethodCalls, isEmpty);
+    });
+
     test('watchDocumentChanges sends method args and maps typed payload',
         () async {
       mockStreamHandler = MockStreamHandler.inline(
@@ -1249,13 +1388,13 @@ void main() {
         },
       );
 
-      late Stream<ICloudDocumentChange> changeStream;
+      late Future<List<ICloudDocumentChange>> changeEvents;
 
       await platform.watchDocumentChanges(
         containerId: containerId,
         relativePath: 'Documents/journal.json',
         onChange: (stream) {
-          changeStream = stream;
+          changeEvents = stream.toList();
         },
       );
 
@@ -1268,7 +1407,7 @@ void main() {
       expect(args['relativePath'], 'Documents/journal.json');
       expect(args['eventChannelName'], lastEventChannelName);
 
-      final events = await changeStream.toList();
+      final events = await changeEvents;
       expect(events, [
         const ICloudDocumentChange(
           relativePath: 'Documents/journal.json',
@@ -1306,26 +1445,23 @@ void main() {
         },
       );
 
-      late Stream<ICloudDocumentChange> changeStream;
+      late Future<void> changeExpectation;
 
       await platform.watchDocumentChanges(
         containerId: containerId,
         relativePath: 'Documents/journal.json',
         onChange: (stream) {
-          changeStream = stream;
+          changeExpectation = expectLater(
+            stream,
+            emitsError(isA<ICloudCoordinationException>()),
+          );
         },
       );
 
-      await expectLater(
-        changeStream,
-        emitsInOrder([
-          emitsError(isA<ICloudCoordinationException>()),
-          emitsDone,
-        ]),
-      );
+      await changeExpectation;
     });
 
-    test('watchDocumentChanges does not expose stream when native start fails',
+    test('watchDocumentChanges closes stream when native start fails',
         () async {
       TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
           .setMockMethodCallHandler(channel, (methodCall) async {
@@ -1356,23 +1492,26 @@ void main() {
         return null;
       });
 
-      late Stream<ICloudDocumentChange> changeStream;
+      late Future<void> changeExpectation;
 
       await expectLater(
         platform.watchDocumentChanges(
           containerId: containerId,
           relativePath: 'Documents/journal.json',
           onChange: (stream) {
-            changeStream = stream;
+            changeExpectation = expectLater(
+              stream,
+              emitsInOrder([
+                emitsError(isA<ICloudContainerAccessException>()),
+                emitsDone,
+              ]),
+            );
           },
         ),
         throwsA(isA<ICloudContainerAccessException>()),
       );
 
-      await expectLater(
-        changeStream,
-        emitsError(isA<ICloudContainerAccessException>()),
-      );
+      await changeExpectation;
       expect(mockMethodCalls.map((call) => call.method), [
         'createEventChannel',
         'watchDocumentChanges',
@@ -1387,35 +1526,35 @@ void main() {
         },
       );
 
-      late Stream<ICloudDocumentChange> changeStream;
+      late Future<void> changeExpectation;
 
       await platform.watchDocumentChanges(
         containerId: containerId,
         relativePath: 'Documents/journal.json',
         onChange: (stream) {
-          changeStream = stream;
+          changeExpectation = expectLater(
+            stream,
+            emitsInOrder([
+              emitsError(
+                isA<ICloudOperationException>()
+                    .having(
+                      (error) => error.category,
+                      'category',
+                      'pluginContract',
+                    )
+                    .having(
+                      (error) => error.operation,
+                      'operation',
+                      'watchDocumentChanges',
+                    ),
+              ),
+              emitsDone,
+            ]),
+          );
         },
       );
 
-      await expectLater(
-        changeStream,
-        emitsInOrder([
-          emitsError(
-            isA<ICloudOperationException>()
-                .having(
-                  (error) => error.category,
-                  'category',
-                  'pluginContract',
-                )
-                .having(
-                  (error) => error.operation,
-                  'operation',
-                  'watchDocumentChanges',
-                ),
-          ),
-          emitsDone,
-        ]),
-      );
+      await changeExpectation;
     });
 
     test('ICloudDocumentChange.fromMap rejects missing relativePath', () {
@@ -1434,13 +1573,14 @@ void main() {
       );
     });
 
-    test('ICloudDocumentChange.fromMap maps unknown kind fallback', () {
-      final change = ICloudDocumentChange.fromMap(const {
-        'relativePath': 'Documents/journal.json',
-        'kind': 'newKind',
-      });
-
-      expect(change.kind, ICloudDocumentChangeKind.unknown);
+    test('ICloudDocumentChange.fromMap rejects unsupported kinds', () {
+      expect(
+        () => ICloudDocumentChange.fromMap(const {
+          'relativePath': 'Documents/journal.json',
+          'kind': 'newKind',
+        }),
+        throwsA(isA<FormatException>()),
+      );
     });
   });
 
@@ -1641,7 +1781,7 @@ void main() {
     );
   });
 
-  test('unmodeled native categories preserve their category', () async {
+  test('cancelled native categories map to dedicated exceptions', () async {
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(channel, (methodCall) async {
       if (methodCall.method == 'icloudAvailable') {
@@ -1660,9 +1800,55 @@ void main() {
 
     await expectLater(
       platform.icloudAvailable,
+      throwsA(isA<ICloudCancelledException>()),
+    );
+  });
+
+  test('initialization categories map to dedicated exceptions', () async {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (methodCall) async {
+      if (methodCall.method == 'icloudAvailable') {
+        throw PlatformException(
+          code: _nativeCodeError,
+          message: 'Plugin not initialized',
+          details: {
+            'category': 'initialization',
+            'operation': 'icloudAvailable',
+            'retryable': false,
+          },
+        );
+      }
+      return null;
+    });
+
+    await expectLater(
+      platform.icloudAvailable,
+      throwsA(isA<ICloudInitializationException>()),
+    );
+  });
+
+  test('future native categories preserve their category', () async {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (methodCall) async {
+      if (methodCall.method == 'icloudAvailable') {
+        throw PlatformException(
+          code: _nativeCodeError,
+          message: 'Future native failure',
+          details: {
+            'category': 'futureCategory',
+            'operation': 'icloudAvailable',
+            'retryable': false,
+          },
+        );
+      }
+      return null;
+    });
+
+    await expectLater(
+      platform.icloudAvailable,
       throwsA(
         isA<ICloudOperationException>()
-            .having((error) => error.category, 'category', 'cancelled')
+            .having((error) => error.category, 'category', 'futureCategory')
             .having(
               (error) => error is ICloudUnknownNativeException,
               'is ICloudUnknownNativeException',
@@ -1847,26 +2033,125 @@ void main() {
       },
     );
 
-    late Stream<ICloudTransferProgress> progressStream;
+    late Future<void> progressExpectation;
 
     await platform.downloadFile(
       containerId: containerId,
       relativePath: 'file',
       localPath: '/tmp/file',
       onProgress: (stream) {
-        progressStream = stream;
+        progressExpectation = expectLater(
+          stream,
+          emitsError(
+            isA<ICloudUnknownNativeException>().having(
+              (error) => error.operation,
+              'operation',
+              'downloadFile',
+            ),
+          ),
+        );
       },
     );
 
-    await expectLater(
-      progressStream,
-      emitsError(
-        isA<ICloudUnknownNativeException>().having(
-          (error) => error.operation,
-          'operation',
-          'downloadFile',
-        ),
-      ),
+    await progressExpectation;
+  });
+
+  test('transfer failure is not duplicated when native reports stream delivery',
+      () async {
+    mockStreamHandler = MockStreamHandler.inline(
+      onListen: (arguments, events) {
+        events.error(
+          code: _nativeCodeError,
+          message: 'Native failure',
+          details: {
+            'category': 'unknownNative',
+            'operation': 'downloadFile',
+            'retryable': false,
+          },
+        );
+      },
     );
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (methodCall) async {
+      mockMethodCall = methodCall;
+      mockMethodCalls.add(methodCall);
+      if (methodCall.method == 'createEventChannel') {
+        final args = mockArguments();
+        lastEventChannelName = args['eventChannelName'] as String?;
+        if (lastEventChannelName != null && mockStreamHandler != null) {
+          final eventChannel = EventChannel(lastEventChannelName!);
+          TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+              .setMockStreamHandler(eventChannel, mockStreamHandler);
+        }
+        return null;
+      }
+      return null;
+    });
+
+    late Future<void> progressExpectation;
+    await platform.downloadFile(
+      containerId: containerId,
+      relativePath: 'file',
+      localPath: '/tmp/file',
+      onProgress: (stream) {
+        progressExpectation = expectLater(
+          stream,
+          emitsError(isA<ICloudUnknownNativeException>()),
+        );
+      },
+    );
+
+    await progressExpectation;
+  });
+
+  test('transfer setup failure reaches stream and Future', () async {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (methodCall) async {
+      if (methodCall.method == 'createEventChannel') return 'unexpected';
+      return null;
+    });
+
+    late Future<void> progressExpectation;
+    await expectLater(
+      () => platform.uploadFile(
+        containerId: containerId,
+        localPath: '/dir/file',
+        relativePath: 'dest',
+        onProgress: (stream) {
+          progressExpectation = expectLater(
+            stream,
+            emitsInOrder([
+              emitsError(_pluginContractFor('createEventChannel')),
+              emitsDone,
+            ]),
+          );
+        },
+      ),
+      throwsA(_pluginContractFor('createEventChannel')),
+    );
+    await progressExpectation;
+  });
+
+  test('paused listener does not block setup failure Future', () async {
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (methodCall) async {
+      if (methodCall.method == 'createEventChannel') return 'unexpected';
+      return null;
+    });
+
+    late StreamSubscription<ICloudTransferProgress> subscription;
+    await expectLater(
+      () => platform.uploadFile(
+        containerId: containerId,
+        localPath: '/dir/file',
+        relativePath: 'dest',
+        onProgress: (stream) {
+          subscription = stream.listen((_) {}, onError: (_) {})..pause();
+        },
+      ),
+      throwsA(_pluginContractFor('createEventChannel')),
+    ).timeout(const Duration(seconds: 1));
+
+    await subscription.cancel();
   });
 }

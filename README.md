@@ -1,11 +1,11 @@
 # iCloud Storage Plus
 
 [![Pub Version](https://img.shields.io/pub/v/icloud_storage_plus)](https://pub.dev/packages/icloud_storage_plus)
-[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/kingdomseed/icloud_storage_plus)
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/Jason-Holt-Digital/icloud_storage_plus)
 [![Platform](https://img.shields.io/badge/platform-iOS%20%7C%20macOS-blue)]()
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![style: very good analysis](https://img.shields.io/badge/style-very_good_analysis-B22C89.svg)](https://pub.dev/packages/very_good_analysis)
-[![shorebird ci](https://api.shorebird.dev/api/v1/github/kingdomseed/icloud_storage_plus/badge.svg)](https://console.shorebird.dev/ci)
+[![shorebird ci](https://api.shorebird.dev/api/v1/github/Jason-Holt-Digital/icloud_storage_plus/badge.svg)](https://console.shorebird.dev/ci)
 [![Publisher](https://img.shields.io/badge/publisher-jasonholtdigital.com-2b7cff)](https://pub.dev/publishers/jasonholtdigital.com)
 
 Flutter plugin for local file access inside an iCloud Drive ubiquity container
@@ -13,7 +13,7 @@ on iOS and macOS, with coordinated file operations and optional Files app
 visibility.
 
 Hosted reference docs are available on DeepWiki:
-https://deepwiki.com/kingdomseed/icloud_storage_plus
+https://deepwiki.com/Jason-Holt-Digital/icloud_storage_plus
 
 This package operates inside your app's local iCloud ubiquity container. Apple
 owns iCloud Drive sync, materialization, freshness, and document conflict
@@ -204,8 +204,8 @@ Future<void> example() async {
 ## Watching document changes
 
 `watchDocumentChanges` observes an existing file. Create or load the document
-before starting the watcher, then cancel the returned stream subscription when
-it is no longer needed.
+before starting the watcher, attach a listener synchronously inside `onChange`,
+then cancel the returned stream subscription when it is no longer needed.
 
 ```dart
 import 'dart:async';
@@ -229,7 +229,6 @@ await ICloudStorage.watchDocumentChanges(
           break;
         case ICloudDocumentChangeKind.savingError:
         case ICloudDocumentChangeKind.editingDisabled:
-        case ICloudDocumentChangeKind.unknown:
           break;
       }
     });
@@ -266,8 +265,10 @@ Progress and successful completion are delivered as data events of type
 `ICloudTransferProgress`. Failures are delivered through stream `onError` as
 typed `ICloudOperationException` values.
 
-Important: the progress stream is listener-driven; start listening immediately
-in the `onProgress` callback or you may miss early events.
+Important: attach a listener synchronously inside the `onProgress` callback.
+Delayed or ignored streams are rejected before native event-channel allocation.
+Canceling that listener stops progress observation; it does not cancel the file
+transfer.
 
 ```dart
 await ICloudStorage.uploadFile(
@@ -327,8 +328,9 @@ metadata snapshot. If any native entry is malformed, the initial call or update
 stream fails with a typed plugin-contract exception; partial snapshots are never
 returned.
 
-When `onUpdate` is provided, the update stream stays active until the
-subscription is canceled. (Dispose listeners when done.)
+When `onUpdate` is provided, attach a listener synchronously inside the
+callback. Delayed or ignored streams are rejected before native event-channel
+allocation. The update stream stays active until the subscription is canceled.
 
 ```dart
 final initial = await ICloudStorage.gather(
@@ -496,8 +498,9 @@ key lookups that are not part of the current implementation.
 
 ### Dart-side validation (`InvalidArgumentException`)
 
-Thrown when you pass an invalid path/name to the Dart API (before calling
-native code).
+Thrown when you pass an invalid path/name to the Dart API, or when a stream
+callback returns without attaching a listener synchronously. These failures
+occur before native allocation.
 
 ### Native and channel failures (`ICloudOperationException`)
 
@@ -511,14 +514,20 @@ and `getItemMetadata`, plus `gather`, document-change, and transfer streams:
 - `ICloudConflictException`
 - `ICloudCoordinationException`
 - `ICloudInvalidArgumentException`
+- `ICloudCancelledException`
+- `ICloudInitializationException`
 - `ICloudUnknownNativeException`
+- Direct `ICloudOperationException` values for `pluginContract` failures or
+  native categories introduced after this package version
 
 For iOS and macOS file-write overwrite operations, trying to overwrite an existing
 directory target is treated as an invalid argument rather than as a successful
 replacement.
 
 These exceptions expose `operation`, `retryable`, `relativePath`, and native
-error context when the platform provides it.
+error context when the platform provides it. `ICloudCancelledException` reports
+native operation cancellation; `ICloudInitializationException` reports a native
+plugin or event-channel initialization failure.
 
 `ICloudCoordinationException` is reserved for structured coordination failures.
 Current iOS and macOS native implementations still classify some lower-level
@@ -544,7 +553,7 @@ timeout/readiness failures from them.
 
 ## Documentation
 
-- Hosted DeepWiki reference: https://deepwiki.com/kingdomseed/icloud_storage_plus
+- Hosted DeepWiki reference: https://deepwiki.com/Jason-Holt-Digital/icloud_storage_plus
 - Local notes index: `doc/README.md`
 
 ## License

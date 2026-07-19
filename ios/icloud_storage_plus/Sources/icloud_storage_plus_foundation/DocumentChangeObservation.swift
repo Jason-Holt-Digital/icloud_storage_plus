@@ -194,21 +194,22 @@ final class DeferredCancellationHandler {
 }
 
 /// Linearizes stream delivery against cancellation without invoking the
-/// listener while holding the separate handler-state queue. Events produced
-/// before the first listener are retained so early terminal failures can be
-/// delivered when Dart begins listening.
+/// listener while holding the separate handler-state queue. Ordinary events
+/// produced before the listener handshake are dropped. Only a bounded terminal
+/// error/end sequence is retained for delivery when Dart begins listening.
 final class StreamEventDelivery<Event> {
     typealias Listener = (Event) -> Void
 
     private let lock = NSRecursiveLock()
     private var listener: Listener?
-    private var pendingEvents: [Event] = []
+    private var pendingTerminalEvents: [Event] = []
+    private var finished = false
     private var cancelled = false
 
     var hasPendingEvents: Bool {
         lock.lock()
         defer { lock.unlock() }
-        return !pendingEvents.isEmpty
+        return !pendingTerminalEvents.isEmpty
     }
 
     func listen(_ newListener: @escaping Listener) {
@@ -217,8 +218,8 @@ final class StreamEventDelivery<Event> {
         guard !cancelled else { return }
 
         listener = newListener
-        let events = pendingEvents
-        pendingEvents.removeAll()
+        let events = pendingTerminalEvents
+        pendingTerminalEvents.removeAll()
         for event in events {
             guard !cancelled else { return }
             newListener(event)
@@ -229,20 +230,34 @@ final class StreamEventDelivery<Event> {
         lock.lock()
         cancelled = true
         listener = nil
-        pendingEvents.removeAll()
+        pendingTerminalEvents.removeAll()
         lock.unlock()
     }
 
     func emit(_ event: Event) {
         lock.lock()
         defer { lock.unlock() }
-        guard !cancelled else { return }
-
-        guard let listener else {
-            pendingEvents.append(event)
-            return
-        }
+        guard !cancelled, !finished, let listener else { return }
         listener(event)
+    }
+
+    @discardableResult
+    func finish(_ terminalEvents: [Event]) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !cancelled, !finished else { return false }
+        finished = true
+
+        let boundedEvents = Array(terminalEvents.suffix(2))
+        guard let listener else {
+            pendingTerminalEvents = boundedEvents
+            return true
+        }
+        for event in boundedEvents {
+            guard !cancelled else { return false }
+            listener(event)
+        }
+        return true
     }
 }
 

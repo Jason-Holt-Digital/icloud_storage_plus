@@ -10,7 +10,7 @@ Pod::Spec.new do |s|
 Flutter plugin for uploading, downloading, and managing files in an iCloud
 container, with document coordination via UIDocument/NSDocument.
                        DESC
-  s.homepage         = 'https://github.com/kingdomseed/icloud_storage_plus'
+  s.homepage         = 'https://github.com/Jason-Holt-Digital/icloud_storage_plus'
   s.license          = { :type => 'MIT', :file => '../LICENSE' }
   s.author           = 'kingdomseed'
   s.source           = { :path => '.' }

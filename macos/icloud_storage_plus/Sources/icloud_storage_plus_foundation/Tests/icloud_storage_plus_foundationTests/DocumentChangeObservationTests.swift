@@ -20,7 +20,7 @@ private final class LockedCounter: @unchecked Sendable {
 }
 
 final class DocumentChangeObservationTests: XCTestCase {
-    func testStreamDeliveryFlushesEarlyEventsInOrder() {
+    func testStreamDeliveryDropsOrdinaryEventsBeforeListening() {
         let delivery = StreamEventDelivery<Int>()
         var events: [Int] = []
 
@@ -28,8 +28,23 @@ final class DocumentChangeObservationTests: XCTestCase {
         delivery.emit(2)
         delivery.listen { events.append($0) }
 
-        XCTAssertEqual(events, [1, 2])
+        XCTAssertTrue(events.isEmpty)
         XCTAssertFalse(delivery.hasPendingEvents)
+    }
+
+    func testStreamDeliveryRetainsBoundedTerminalEvents() {
+        let delivery = StreamEventDelivery<Int>()
+        var events: [Int] = []
+
+        delivery.finish([1, 2, 3])
+        XCTAssertTrue(delivery.hasPendingEvents)
+        delivery.finish([4])
+        delivery.listen { events.append($0) }
+
+        XCTAssertEqual(events, [2, 3])
+        XCTAssertFalse(delivery.hasPendingEvents)
+        delivery.emit(5)
+        XCTAssertEqual(events, [2, 3])
     }
 
     func testStreamDeliveryCancellationWinsAgainstConcurrentEmission() {
@@ -67,7 +82,7 @@ final class DocumentChangeObservationTests: XCTestCase {
         let delivery = StreamEventDelivery<Int>()
         var events: [Int] = []
 
-        delivery.emit(1)
+        delivery.finish([1, 2])
         delivery.cancel()
         delivery.listen { events.append($0) }
 

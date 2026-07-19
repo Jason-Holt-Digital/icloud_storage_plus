@@ -141,7 +141,7 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
     operation: String,
     relativePath: String? = nil,
     result: @escaping FlutterResult,
-    onFailure: ((FlutterError) -> Void)? = nil,
+    onFailure: ((FlutterError) -> Bool)? = nil,
     onResolved: @escaping (URL) -> Void
   ) {
     Task { @MainActor [self] in
@@ -152,8 +152,8 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
           operation: operation,
           relativePath: relativePath
         )
-        onFailure?(error)
-        result(error)
+        let deliveredToStream = onFailure?(error) ?? false
+        result(deliveredToStream ? nil : error)
         return
       }
 
@@ -194,8 +194,10 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
       operation: "gather",
       result: result,
       onFailure: { [weak self] _ in
-        guard !eventChannelName.isEmpty else { return }
-        self?.removeStreamHandler(eventChannelName)
+        if !eventChannelName.isEmpty {
+          self?.removeStreamHandler(eventChannelName)
+        }
+        return false
       }
     ) { [self] containerURL in
       startGather(
@@ -265,6 +267,7 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
       result: result,
       onFailure: { [weak self] _ in
         self?.removeStreamHandler(eventChannelName)
+        return false
       }
     ) { [self] containerURL in
       startDocumentChangeObservation(
@@ -625,11 +628,11 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
           operation: "uploadFile",
           relativePath: relativePath
         )
-        failProgressStream(
+        let deliveredToStream = failProgressStream(
           eventChannelName: eventChannelName,
           error: mapped
         )
-        result(mapped)
+        result(deliveredToStream ? nil : mapped)
         return
       }
 
@@ -675,11 +678,11 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
           operation: "uploadFile",
           relativePath: relativePath
         )
-        self.failProgressStream(
+        let deliveredToStream = self.failProgressStream(
           eventChannelName: eventChannelName,
           error: mapped
         )
-        result(mapped)
+        result(deliveredToStream ? nil : mapped)
       }
     }
   }
@@ -775,12 +778,14 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
       ) else {
         return
       }
-      streamHandler.setEvent(nativeCodeError(
-        error,
-        operation: "uploadFile",
-        relativePath: relativePath
-      ))
-      streamHandler.setEvent(FlutterEndOfEventStream)
+      streamHandler.finish(with: [
+        nativeCodeError(
+          error,
+          operation: "uploadFile",
+          relativePath: relativePath
+        ),
+        FlutterEndOfEventStream,
+      ])
       session.cancel()
       removeStreamHandler(eventChannelName)
       return
@@ -794,7 +799,7 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
         ) else {
           return
         }
-        streamHandler.setEvent(FlutterEndOfEventStream)
+        streamHandler.finish(with: [FlutterEndOfEventStream])
         session.cancel()
         removeStreamHandler(eventChannelName)
       }
@@ -822,7 +827,7 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
         self?.failProgressStream(
           eventChannelName: eventChannelName,
           error: error
-        )
+        ) ?? false
       }
     ) { [self] containerURL in
       DebugHelper.log("containerURL: \(containerURL.path)")
@@ -841,11 +846,11 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
           operation: "downloadFile",
           relativePath: relativePath
         )
-        failProgressStream(
+        let deliveredToStream = failProgressStream(
           eventChannelName: eventChannelName,
           error: mapped
         )
-        result(mapped)
+        result(deliveredToStream ? nil : mapped)
         return
       }
 
@@ -911,16 +916,18 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
             operation: "downloadFile",
             relativePath: relativePath
           )
-          downloadStreamHandler?.setEvent(mapped)
-          downloadStreamHandler?.setEvent(FlutterEndOfEventStream)
+          let deliveredToStream = downloadStreamHandler?.finish(with: [
+            mapped,
+            FlutterEndOfEventStream,
+          ]) ?? false
           downloadSession?.cancel()
           removeStreamHandler(eventChannelName)
-          completeOnce(mapped)
+          completeOnce(deliveredToStream ? nil : mapped)
           return
         }
 
         emitProgress(100.0, eventChannelName: eventChannelName)
-        downloadStreamHandler?.setEvent(FlutterEndOfEventStream)
+        downloadStreamHandler?.finish(with: [FlutterEndOfEventStream])
         downloadSession?.cancel()
         removeStreamHandler(eventChannelName)
         completeOnce(nil)
@@ -2025,16 +2032,18 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
   private func failProgressStream(
     eventChannelName: String,
     error: FlutterError
-  ) {
+  ) -> Bool {
     guard !eventChannelName.isEmpty,
           let streamHandler = registeredStreamHandler(
             for: eventChannelName
           ) else {
-      return
+      return false
     }
-    streamHandler.setEvent(error)
-    streamHandler.setEvent(FlutterEndOfEventStream)
+    let delivered = streamHandler.finish(
+      with: [error, FlutterEndOfEventStream]
+    )
     removeStreamHandler(eventChannelName)
+    return delivered
   }
 
   /// Removes a stream handler after the Dart cancellation handshake. A
@@ -2560,9 +2569,15 @@ class StreamHandler: NSObject, FlutterStreamHandler {
     return nil
   }
 
-  /// Emits an event to the Flutter stream.
+  /// Emits a non-terminal event to the Flutter stream.
   func setEvent(_ data: Any) {
     eventDelivery.emit(data)
+  }
+
+  /// Finishes the Flutter stream with a bounded terminal event sequence.
+  @discardableResult
+  func finish(with terminalEvents: [Any]) -> Bool {
+    eventDelivery.finish(terminalEvents)
   }
 }
 

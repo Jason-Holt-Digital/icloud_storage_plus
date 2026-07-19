@@ -60,8 +60,9 @@ class ICloudStorage {
 
   /// Get all file metadata from the iCloud container.
   ///
-  /// When [onUpdate] is provided, the update stream stays active until the
-  /// subscription is canceled. Callers should dispose listeners when done.
+  /// When [onUpdate] is provided, attach a listener synchronously inside the
+  /// callback. The update stream stays active until the subscription is
+  /// canceled. Callers should dispose listeners when done.
   static Future<GatherResult> gather({
     required String containerId,
     StreamHandler<GatherResult>? onUpdate,
@@ -74,9 +75,10 @@ class ICloudStorage {
 
   /// Watch document invalidation and state events for an existing document.
   ///
-  /// Each call provides one single-subscription stream. Cancel that Dart
-  /// subscription when finished; cancellation tears down native observation
-  /// even when presenter registration is still starting.
+  /// Each call provides one single-subscription stream. [onChange] must attach
+  /// a listener synchronously inside the callback. Cancel the Dart subscription
+  /// when finished; cancellation tears down native observation even when
+  /// presenter registration is still starting.
   ///
   /// Treat events as invalidation hints and reread the document through a
   /// coordinated API. Foundation may coalesce callbacks, and iCloud Drive owns
@@ -131,10 +133,12 @@ class ICloudStorage {
   /// Trailing slashes are rejected here because transfers are file-centric and
   /// coordinated through UIDocument/NSDocument (directories are not supported).
   ///
-  /// If [onProgress] is provided, attach a listener immediately inside the
-  /// callback. Progress streams are listener-driven (not buffered), so delaying
-  /// `listen()` may miss early progress events. Failures use the stream error
-  /// channel with typed [ICloudOperationException] values.
+  /// If [onProgress] is provided, attach a listener synchronously inside the
+  /// callback. Delayed or ignored streams are rejected before native
+  /// allocation.
+  /// Canceling the progress subscription stops progress observation, not the
+  /// transfer. Failures use the stream error channel with typed
+  /// [ICloudOperationException] values.
   static Future<void> uploadFile({
     required String containerId,
     required String localPath,
@@ -178,10 +182,12 @@ class ICloudStorage {
   /// Trailing slashes are rejected here because transfers are file-centric and
   /// coordinated through UIDocument/NSDocument (directories are not supported).
   ///
-  /// If [onProgress] is provided, attach a listener immediately inside the
-  /// callback. Progress streams are listener-driven (not buffered), so delaying
-  /// `listen()` may miss early progress events. Failures use the stream error
-  /// channel with typed [ICloudOperationException] values.
+  /// If [onProgress] is provided, attach a listener synchronously inside the
+  /// callback. Delayed or ignored streams are rejected before native
+  /// allocation.
+  /// Canceling the progress subscription stops progress observation, not the
+  /// transfer. Failures use the stream error channel with typed
+  /// [ICloudOperationException] values.
   static Future<void> downloadFile({
     required String containerId,
     required String relativePath,
