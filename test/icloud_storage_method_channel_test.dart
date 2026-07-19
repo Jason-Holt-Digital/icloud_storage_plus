@@ -1812,6 +1812,48 @@ void main() {
       await changeExpectation;
     });
 
+    test('watchDocumentChanges surfaces unsupported kinds as typed errors',
+        () async {
+      mockStreamHandler = MockStreamHandler.inline(
+        onListen: (arguments, events) {
+          events.success({
+            'relativePath': 'Documents/journal.json',
+            'kind': 'newKind',
+          });
+        },
+      );
+
+      late Future<void> changeExpectation;
+
+      await platform.watchDocumentChanges(
+        containerId: containerId,
+        relativePath: 'Documents/journal.json',
+        onChange: (stream) {
+          changeExpectation = expectLater(
+            stream,
+            emitsInOrder([
+              emitsError(
+                isA<ICloudOperationException>()
+                    .having(
+                      (error) => error.category,
+                      'category',
+                      'pluginContract',
+                    )
+                    .having(
+                      (error) => error.operation,
+                      'operation',
+                      'watchDocumentChanges',
+                    ),
+              ),
+              emitsDone,
+            ]),
+          );
+        },
+      );
+
+      await changeExpectation;
+    });
+
     test('ICloudDocumentChange.fromMap rejects missing relativePath', () {
       expect(
         () => ICloudDocumentChange.fromMap(const {'kind': 'invalidation'}),
