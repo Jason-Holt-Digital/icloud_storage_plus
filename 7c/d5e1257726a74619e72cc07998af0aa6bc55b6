@@ -1,0 +1,19 @@
+test/icloud_storage_method_channel_test.dart
+  s_1b171c8d379963::t_2e620d695a8cec 1722-1725
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.14",
+  "base_commit_sha": "7cd5e1257726a74619e72cc07998af0aa6bc55b6",
+  "prompts": {},
+  "sessions": {
+    "s_1b171c8d379963": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3638441f-5955-45ac-8421-f728260a8f4d",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Jason Holt <st199007@stud.uni-stuttgart.de>"
+    }
+  }
+}
