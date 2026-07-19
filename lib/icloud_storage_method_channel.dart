@@ -137,7 +137,7 @@ class MethodChannelICloudStorage extends ICloudStoragePlatform {
     }
     try {
       return ICloudDocumentChange.fromMap(event);
-    } on FormatException catch (error) {
+    } on Object catch (error) {
       throw _channelContractError(
         operation: 'watchDocumentChanges',
         message: 'Malformed document change event payload: $error',
