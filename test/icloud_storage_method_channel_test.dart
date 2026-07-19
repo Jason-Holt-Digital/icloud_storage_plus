@@ -1719,7 +1719,10 @@ void main() {
         },
       );
 
-      expect(mockMethodCalls.map((call) => call.method), ['createEventChannel']);
+      expect(
+        mockMethodCalls.map((call) => call.method),
+        ['createEventChannel'],
+      );
       expect(streamCancelled, isTrue);
     });
 
