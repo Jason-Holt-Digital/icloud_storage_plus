@@ -107,6 +107,7 @@ class MethodChannelICloudStorage extends ICloudStoragePlatform {
           mapEvent: _mapDocumentChangeEvent,
         ),
       );
+      if (bridge.isCancelled) return;
 
       await _invokeVoidMethod('watchDocumentChanges', {
         'containerId': containerId,

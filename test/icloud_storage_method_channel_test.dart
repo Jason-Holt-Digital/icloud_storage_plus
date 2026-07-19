@@ -1683,6 +1683,46 @@ void main() {
       ]);
     });
 
+    test('watchDocumentChanges skips native start after allocation cancel',
+        () async {
+      var streamCancelled = false;
+      mockStreamHandler = MockStreamHandler.inline(
+        onListen: (arguments, events) {},
+        onCancel: (arguments) => streamCancelled = true,
+      );
+
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, (methodCall) async {
+        mockMethodCall = methodCall;
+        mockMethodCalls.add(methodCall);
+        if (methodCall.method == 'createEventChannel') {
+          final args = mockArguments();
+          lastEventChannelName = args['eventChannelName'] as String?;
+          if (lastEventChannelName != null && mockStreamHandler != null) {
+            final eventChannel = EventChannel(lastEventChannelName!);
+            TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+                .setMockStreamHandler(eventChannel, mockStreamHandler);
+          }
+          await Future<void>.delayed(Duration.zero);
+          return null;
+        }
+        return null;
+      });
+
+      late StreamSubscription<ICloudDocumentChange> subscription;
+      await platform.watchDocumentChanges(
+        containerId: containerId,
+        relativePath: 'Documents/journal.json',
+        onChange: (stream) {
+          subscription = stream.listen((_) {});
+          scheduleMicrotask(subscription.cancel);
+        },
+      );
+
+      expect(mockMethodCalls.map((call) => call.method), ['createEventChannel']);
+      expect(streamCancelled, isTrue);
+    });
+
     test('watchDocumentChanges maps stream errors to typed exceptions',
         () async {
       mockStreamHandler = MockStreamHandler.inline(
