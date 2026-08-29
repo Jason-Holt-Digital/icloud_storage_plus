@@ -230,6 +230,7 @@ dart run build_runner build --delete-conflicting-outputs
 ```
 
 ## Testing
+Tautological tests considered harmful.
 * **Running Tests:** To run tests, use the `run_tests` tool if it is available, otherwise use `flutter test`.
 * **Unit Tests:** Use `package:test` for unit tests.
 * **Widget Tests:** Use `package:flutter_test` for widget tests (only for example app changes).
