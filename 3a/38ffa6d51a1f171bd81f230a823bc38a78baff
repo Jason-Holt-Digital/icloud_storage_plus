@@ -1,0 +1,19 @@
+AGENTS.md
+  s_255b820d5a4073::t_9f027b0c638737 1,19-24,33-34,52-53,141-143,159-184
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "3a38ffa6d51a1f171bd81f230a823bc38a78baff",
+  "prompts": {},
+  "sessions": {
+    "s_255b820d5a4073": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a09753-dbe9-7c51-9c92-221940bf618c",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Jason Holt <st199007@stud.uni-stuttgart.de>"
+    }
+  }
+}
