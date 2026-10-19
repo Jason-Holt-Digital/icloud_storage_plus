@@ -1,0 +1,121 @@
+# Based on Factory-AI/droid-action v10 native automatic review and security modes.
+name: Factory Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions: {}
+
+concurrency:
+  group: factory-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  authorize:
+    if: >-
+      vars.JHD_FACTORY_REVIEW_ENABLED == 'true' &&
+      github.event.pull_request.draft == false &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      (github.event.sender.type == 'User' ||
+       github.event.sender.login == 'factory-droid[bot]')
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      pull-requests: read
+    outputs:
+      eligible: ${{ steps.check.outputs.eligible }}
+    steps:
+      - name: Check current head and completed reviews
+        id: check
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8.0.0
+        env:
+          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const expected = context.payload.pull_request;
+            const { data: pr } = await github.rest.pulls.get({
+              owner, repo, pull_number: expected.number,
+            });
+            if (pr.state !== 'open' || pr.draft ||
+                pr.head.repo?.full_name !== `${owner}/${repo}` ||
+                pr.head.sha !== expected.head.sha) {
+              core.info('Skipping a fork, draft, closed PR, or superseded head.');
+              return;
+            }
+            const actors = new Set([context.actor, process.env.TRIGGERING_ACTOR]);
+            for (const actor of actors) {
+              if (actor === 'factory-droid[bot]') continue;
+              if (actor.endsWith('[bot]')) {
+                core.setFailed('Only factory-droid is an allowed Factory bot.');
+                return;
+              }
+              const { data } = await github.rest.repos.getCollaboratorPermissionLevel({
+                owner, repo, username: actor,
+              });
+              if (!['admin', 'write'].includes(data.permission)) {
+                core.setFailed('Factory review requires a repository writer.');
+                return;
+              }
+            }
+            const { data } = await github.rest.actions.listWorkflowRuns({
+              owner, repo, workflow_id: 'factory-review.yml',
+              event: 'pull_request', head_sha: pr.head.sha,
+              status: 'success', per_page: 100,
+            });
+            for (const run of data.workflow_runs) {
+              if (run.id === context.runId) continue;
+              const jobs = await github.paginate(
+                github.rest.actions.listJobsForWorkflowRun,
+                { owner, repo, run_id: run.id, per_page: 100 },
+              );
+              if (jobs.some(job => job.name === 'Advisory review and security' &&
+                                   job.conclusion === 'success')) {
+                core.info('This head already completed Factory review.');
+                return;
+              }
+            }
+            core.setOutput('eligible', 'true');
+
+  review:
+    name: Advisory review and security
+    needs: authorize
+    if: needs.authorize.outputs.eligible == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+      id-token: write
+      actions: read
+    steps:
+      - name: Require Factory API key
+        shell: bash
+        env:
+          FACTORY_API_KEY: ${{ secrets.FACTORY_API_KEY }}
+        run: |
+          if [[ -z "$FACTORY_API_KEY" ]]; then
+            echo "::error::FACTORY_API_KEY is required when Factory review is enabled."
+            exit 1
+          fi
+
+      - name: Check out the reviewed head without saved credentials
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Run native deep review and security
+        uses: Factory-AI/droid-action@ec767fcf5fac43b64e746cd42bb398b3b0b529ed # v10
+        with:
+          factory_api_key: ${{ secrets.FACTORY_API_KEY }}
+          automatic_review: "true"
+          automatic_security_review: "true"
+          review_depth: deep
+          security_block_on_critical: "false"
+          security_block_on_high: "false"
+          allowed_bots: factory-droid
+          show_full_output: "false"
