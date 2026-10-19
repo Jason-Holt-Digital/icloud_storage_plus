@@ -48,7 +48,7 @@ jobs:
             }
             const issue = context.payload.issue;
             if (issue && !issue.pull_request) {
-              core.info('Native @droid commands, including full security scans, are PR-only in this rollout. GitHub Issues implementation uses the local queue worker.');
+              core.info('Native @droid commands, including full security scans, are PR-only in this rollout. Ticket-to-PR is deferred; issue triage classifies only.');
               return;
             }
             const actors = new Set([context.actor, process.env.TRIGGERING_ACTOR]);
