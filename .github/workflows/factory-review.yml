@@ -3,18 +3,19 @@ name: Factory Review
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
+    types: [opened, synchronize, reopened, ready_for_review, edited, converted_to_draft, closed]
 
 permissions: {}
 
 concurrency:
-  group: factory-review-${{ github.event.pull_request.number }}
+  group: factory-review-${{ github.event.action == 'edited' && !github.event.changes.base && format('edit-{0}', github.run_id) || github.event.pull_request.number }}
   cancel-in-progress: true
 
 jobs:
   authorize:
     if: >-
       vars.JHD_FACTORY_REVIEW_ENABLED == 'true' &&
+      (github.event.action != 'edited' || github.event.changes.base) &&
       github.event.pull_request.draft == false &&
       github.event.pull_request.head.repo.full_name == github.repository &&
       (github.event.sender.type == 'User' ||
@@ -35,13 +36,18 @@ jobs:
           script: |
             const { owner, repo } = context.repo;
             const expected = context.payload.pull_request;
+            if (context.payload.action === 'edited' && !context.payload.changes?.base) {
+              core.info('Skipping an edit that did not change the PR base.');
+              return;
+            }
             const { data: pr } = await github.rest.pulls.get({
               owner, repo, pull_number: expected.number,
             });
             if (pr.state !== 'open' || pr.draft ||
                 pr.head.repo?.full_name !== `${owner}/${repo}` ||
-                pr.head.sha !== expected.head.sha) {
-              core.info('Skipping a fork, draft, closed PR, or superseded head.');
+                pr.head.sha !== expected.head.sha ||
+                pr.base.ref !== expected.base.ref || pr.base.sha !== expected.base.sha) {
+              core.info('Skipping a fork, draft, closed PR, or superseded head/base.');
               return;
             }
             const actors = new Set([context.actor, process.env.TRIGGERING_ACTOR]);
@@ -66,13 +72,17 @@ jobs:
             });
             for (const run of data.workflow_runs) {
               if (run.id === context.runId) continue;
+              if (!run.pull_requests?.some(candidate =>
+                    candidate.number === pr.number &&
+                    candidate.base?.ref === pr.base.ref &&
+                    candidate.base?.sha === pr.base.sha)) continue;
               const jobs = await github.paginate(
                 github.rest.actions.listJobsForWorkflowRun,
                 { owner, repo, run_id: run.id, per_page: 100 },
               );
               if (jobs.some(job => job.name === 'Advisory review and security' &&
                                    job.conclusion === 'success')) {
-                core.info('This head already completed Factory review.');
+                core.info('This PR head and base already completed Factory review.');
                 return;
               }
             }

@@ -11,20 +11,14 @@ on:
 
 permissions: {}
 
-concurrency:
-  group: factory-mentions-${{ github.event.issue.number || github.event.pull_request.number }}
-  cancel-in-progress: false
-
 jobs:
   authorize:
     if: >-
       vars.JHD_FACTORY_MENTIONS_ENABLED == 'true' &&
       github.actor == (github.event.comment.user.login || github.event.review.user.login) &&
-      ((github.event.sender.type == 'User' &&
-        contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'),
-                 github.event.comment.author_association || github.event.review.author_association)) ||
-       (github.event.sender.type == 'Bot' &&
-        github.event.sender.login == 'factory-droid[bot]')) &&
+      (github.event.comment.user.type || github.event.review.user.type) == 'User' &&
+      contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'),
+               github.event.comment.author_association || github.event.review.author_association) &&
       ((github.event_name == 'issue_comment' &&
         contains(github.event.comment.body, '@droid')) ||
        (github.event_name == 'pull_request_review_comment' &&
@@ -46,11 +40,21 @@ jobs:
         with:
           script: |
             const { owner, repo } = context.repo;
+            const author = context.payload.comment || context.payload.review;
+            if (author.user.type !== 'User' || author.user.login !== context.actor ||
+                !['OWNER', 'MEMBER', 'COLLABORATOR'].includes(author.author_association)) {
+              core.setFailed('Factory mentions require a human repository writer.');
+              return;
+            }
+            const issue = context.payload.issue;
+            if (issue && !issue.pull_request) {
+              core.info('Native @droid commands, including full security scans, are PR-only in this rollout. GitHub Issues implementation uses the local queue worker.');
+              return;
+            }
             const actors = new Set([context.actor, process.env.TRIGGERING_ACTOR]);
             for (const actor of actors) {
-              if (actor === 'factory-droid[bot]') continue;
               if (actor.endsWith('[bot]')) {
-                core.setFailed('Only factory-droid is an allowed Factory bot.');
+                core.setFailed('Factory mentions require human actors.');
                 return;
               }
               const { data } = await github.rest.repos.getCollaboratorPermissionLevel({
@@ -61,25 +65,24 @@ jobs:
                 return;
               }
             }
-            const issue = context.payload.issue;
             const number = issue?.number || context.payload.pull_request.number;
-            if (issue && !issue.pull_request) {
-              if (issue.state !== 'open') return;
-            } else {
-              const { data: pr } = await github.rest.pulls.get({
-                owner, repo, pull_number: number,
-              });
-              if (pr.state !== 'open' ||
-                  pr.head.repo?.full_name !== `${owner}/${repo}`) {
-                core.info('Factory mentions do not run on fork or closed PRs.');
-                return;
-              }
+            const { data: pr } = await github.rest.pulls.get({
+              owner, repo, pull_number: number,
+            });
+            if (pr.state !== 'open' ||
+                pr.head.repo?.full_name !== `${owner}/${repo}`) {
+              core.info('Factory mentions do not run on fork or closed PRs.');
+              return;
             }
             core.setOutput('eligible', 'true');
 
   mentions:
     needs: authorize
     if: needs.authorize.outputs.eligible == 'true'
+    concurrency:
+      group: factory-mentions-${{ github.event.issue.number || github.event.pull_request.number }}
+      cancel-in-progress: false
+      queue: max
     runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
@@ -112,7 +115,6 @@ jobs:
         uses: Factory-AI/droid-action@ec767fcf5fac43b64e746cd42bb398b3b0b529ed # v10
         with:
           factory_api_key: ${{ secrets.FACTORY_API_KEY }}
-          allowed_bots: factory-droid
           review_depth: deep
           security_block_on_critical: "false"
           security_block_on_high: "false"
