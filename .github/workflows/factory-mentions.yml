@@ -109,6 +109,9 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
+      - name: Let Git use the native action's GitHub App token
+        run: gh auth setup-git --hostname github.com --force
+
       # Only comments/reviews authorize a native @droid command. Issue titles,
       # bodies, diffs, and logs are untrusted context, never shell input.
       - name: Run native Droid mention handler
