@@ -46,7 +46,7 @@ jobs:
             if (pr.state !== 'open' || pr.draft ||
                 pr.head.repo?.full_name !== `${owner}/${repo}` ||
                 pr.head.sha !== expected.head.sha ||
-                pr.base.ref !== expected.base.ref || pr.base.sha !== expected.base.sha) {
+                pr.base.ref !== expected.base.ref) {
               core.info('Skipping a fork, draft, closed PR, or superseded head/base.');
               return;
             }
