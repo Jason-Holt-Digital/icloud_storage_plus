@@ -1,15 +1,16 @@
 # Based on Factory-AI/droid-action v10 native automatic review and security modes.
 #
-# One automatic review per PR: when it opens ready for review, or when a draft
-# becomes ready. Later pushes do not start another review; the droid-reviewed
-# label marks a PR as reviewed. To review again, comment `@droid review`
-# (factory-mentions.yml), or remove the label and mark the PR ready again.
+# One automatic review per PR. A successful review adds the droid-reviewed
+# label, and every later event on a labelled PR is skipped. Until then a push
+# cancels the review in progress and starts it again on the new head, so the
+# reviewed code is the code that gets the label. To review again, comment
+# `@droid review` (factory-mentions.yml), or remove the label.
 name: Factory Review
 
 on:
   pull_request:
     # converted_to_draft and closed only cancel a review still in progress.
-    types: [opened, reopened, ready_for_review, converted_to_draft, closed]
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft, closed]
 
 permissions: {}
 
@@ -46,9 +47,8 @@ jobs:
               owner, repo, pull_number: expected.number,
             });
             if (pr.state !== 'open' || pr.draft ||
-                pr.head.repo?.full_name !== `${owner}/${repo}` ||
-                pr.base.ref !== expected.base.ref) {
-              core.info('Skipping a fork, draft, closed PR, or superseded base.');
+                pr.head.repo?.full_name !== `${owner}/${repo}`) {
+              core.info('Skipping a fork, draft, or closed PR.');
               return;
             }
             if (pr.labels?.some(label => label.name === 'droid-reviewed')) {
@@ -117,10 +117,19 @@ jobs:
 
       - name: Mark the PR as reviewed
         uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8.0.0
+        env:
+          REVIEWED_SHA: ${{ needs.authorize.outputs.head_sha }}
         with:
           script: |
             const { owner, repo } = context.repo;
             const name = 'droid-reviewed';
+            const { data: pr } = await github.rest.pulls.get({
+              owner, repo, pull_number: context.payload.pull_request.number,
+            });
+            if (pr.head.sha !== process.env.REVIEWED_SHA) {
+              core.info('The PR moved during the review; the next run reviews the new head.');
+              return;
+            }
             try {
               await github.rest.issues.getLabel({ owner, repo, name });
             } catch (error) {
