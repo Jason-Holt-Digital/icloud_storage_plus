@@ -29,6 +29,8 @@ env:
 
 jobs:
   wiki-refresh:
+    # A manual run from another branch would document unmerged code.
+    if: github.ref_name == github.event.repository.default_branch
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
