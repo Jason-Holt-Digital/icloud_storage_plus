@@ -1,0 +1,16 @@
+name: Publication approval canary
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths: [".github/workflows/publish-approval-canary.yml"]
+
+permissions: {}
+
+jobs:
+  approval:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    environment: pub.dev
+    steps:
+      - run: echo "Human approval received."

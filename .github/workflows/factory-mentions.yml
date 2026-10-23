@@ -1,0 +1,137 @@
+# Based on Factory-AI/droid-action v10 native @droid command mode.
+name: Factory Mentions
+
+on:
+  issue_comment:
+    types: [created]
+  pull_request_review_comment:
+    types: [created]
+  pull_request_review:
+    types: [submitted]
+
+permissions: {}
+
+jobs:
+  authorize:
+    if: >-
+      vars.JHD_FACTORY_MENTIONS_ENABLED == 'true' &&
+      github.actor == (github.event.comment.user.login || github.event.review.user.login) &&
+      (github.event.comment.user.type || github.event.review.user.type) == 'User' &&
+      contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'),
+               github.event.comment.author_association || github.event.review.author_association) &&
+      ((github.event_name == 'issue_comment' &&
+        contains(github.event.comment.body, '@droid')) ||
+       (github.event_name == 'pull_request_review_comment' &&
+        contains(github.event.comment.body, '@droid')) ||
+       (github.event_name == 'pull_request_review' &&
+        contains(github.event.review.body, '@droid')))
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+      issues: read
+    outputs:
+      eligible: ${{ steps.check.outputs.eligible }}
+    steps:
+      - name: Authorize human actor and rerunner with repository-write permission
+        id: check
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8.0.0
+        env:
+          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const author = context.payload.comment || context.payload.review;
+            if (author.user.type !== 'User' || author.user.login !== context.actor ||
+                !['OWNER', 'MEMBER', 'COLLABORATOR'].includes(author.author_association)) {
+              core.setFailed('Factory mentions require a human repository writer.');
+              return;
+            }
+            const issue = context.payload.issue;
+            if (issue && !issue.pull_request) {
+              core.info('Native @droid commands, including full security scans, are PR-only in this rollout. Ticket-to-PR is deferred; issue triage classifies only.');
+              return;
+            }
+            const actors = new Set([context.actor, process.env.TRIGGERING_ACTOR]);
+            for (const actor of actors) {
+              if (actor.endsWith('[bot]')) {
+                core.setFailed('Factory mentions require human actors.');
+                return;
+              }
+              const { data } = await github.rest.repos.getCollaboratorPermissionLevel({
+                owner, repo, username: actor,
+              });
+              if (!['admin', 'write'].includes(data.permission)) {
+                core.setFailed('Factory mentions require a repository writer.');
+                return;
+              }
+            }
+            core.setOutput('eligible', 'true');
+
+  mentions:
+    needs: authorize
+    if: needs.authorize.outputs.eligible == 'true'
+    concurrency:
+      group: factory-mentions-${{ github.event.issue.number || github.event.pull_request.number }}
+      cancel-in-progress: false
+      queue: max
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+      id-token: write
+      actions: read
+    steps:
+      - name: Verify PR is open and same-repository
+        id: check
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8.0.0
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const issue = context.payload.issue;
+            const number = issue?.number || context.payload.pull_request.number;
+            const { data: pr } = await github.rest.pulls.get({
+              owner, repo, pull_number: number,
+            });
+            if (pr.state !== 'open' ||
+                pr.head.repo?.full_name !== `${owner}/${repo}`) {
+              core.info('Factory mentions do not run on fork or closed PRs.');
+              return;
+            }
+            core.setOutput('eligible', 'true');
+
+      - name: Require Factory API key
+        if: steps.check.outputs.eligible == 'true'
+        shell: bash
+        env:
+          FACTORY_API_KEY: ${{ secrets.FACTORY_API_KEY }}
+        run: |
+          if [[ -z "$FACTORY_API_KEY" ]]; then
+            echo "::error::FACTORY_API_KEY is required when Factory mentions are enabled."
+            exit 1
+          fi
+
+      - name: Check out trusted default branch without saved credentials
+        if: steps.check.outputs.eligible == 'true'
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Let Git use the native action's GitHub App token
+        if: steps.check.outputs.eligible == 'true'
+        run: gh auth setup-git --hostname github.com --force
+
+      # Only comments/reviews authorize a native @droid command. Issue titles,
+      # bodies, diffs, and logs are untrusted context, never shell input.
+      - name: Run native Droid mention handler
+        if: steps.check.outputs.eligible == 'true'
+        uses: Factory-AI/droid-action@ec767fcf5fac43b64e746cd42bb398b3b0b529ed # v10
+        with:
+          factory_api_key: ${{ secrets.FACTORY_API_KEY }}
+          review_depth: deep
+          security_block_on_critical: "false"
+          security_block_on_high: "false"
+          show_full_output: "false"
