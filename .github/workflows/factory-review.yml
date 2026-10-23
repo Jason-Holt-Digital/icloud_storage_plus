@@ -137,11 +137,15 @@ jobs:
           allowed_bots: factory-droid
           show_full_output: "false"
 
-      # Adding a missing label creates it.
       - name: Mark the PR as reviewed
         uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8.0.0
         with:
           script: |
+            try {
+              await github.rest.issues.createLabel({ ...context.repo, name: 'droid-reviewed', color: '5319e7' });
+            } catch (error) {
+              if (error.status !== 422) throw error; // 422: the label already exists
+            }
             await github.rest.issues.addLabels({
               ...context.repo,
               issue_number: context.payload.pull_request.number,
