@@ -1,4 +1,9 @@
 # Based on Factory-AI/droid-action v10 native automatic review and security modes.
+#
+# One review per PR: a successful review adds the droid-reviewed label, and
+# labelled PRs are skipped, except CI Steward fix pushes, which
+# factory-ci-steward.yml promises are reviewed. Comment `@droid review` for
+# another review.
 name: Factory Review
 
 on:
@@ -16,6 +21,8 @@ jobs:
     if: >-
       vars.JHD_FACTORY_REVIEW_ENABLED == 'true' &&
       (github.event.action != 'edited' || github.event.changes.base) &&
+      (!contains(github.event.pull_request.labels.*.name, 'droid-reviewed') ||
+       github.event.sender.login == 'factory-droid[bot]') &&
       github.event.pull_request.draft == false &&
       github.event.pull_request.head.repo.full_name == github.repository &&
       (github.event.sender.type == 'User' ||
@@ -129,3 +136,14 @@ jobs:
           security_block_on_high: "false"
           allowed_bots: factory-droid
           show_full_output: "false"
+
+      # Adding a missing label creates it.
+      - name: Mark the PR as reviewed
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8.0.0
+        with:
+          script: |
+            await github.rest.issues.addLabels({
+              ...context.repo,
+              issue_number: context.payload.pull_request.number,
+              labels: ['droid-reviewed'],
+            });
