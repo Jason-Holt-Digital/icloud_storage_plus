@@ -1,0 +1,38 @@
+name: Release Please
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-please
+  cancel-in-progress: false
+
+jobs:
+  release-please:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check release credentials
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN }}
+        run: |
+          if [[ -z "$GH_TOKEN" ]]; then
+            echo "::error::Set RELEASE_PLEASE_TOKEN with Contents, Pull requests, and Issues write access. See https://github.com/$GITHUB_REPOSITORY/blob/main/.github/RELEASES.md"
+            exit 1
+          fi
+          gh api --silent "repos/$GITHUB_REPOSITORY"
+      - name: Create release pull requests and releases
+        uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
+        with:
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN }}
+          target-branch: main
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
