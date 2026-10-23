@@ -1,0 +1,67 @@
+{
+  "generatedAt": "2026-10-23T10:28:17Z",
+  "commitHash": "e2380af07dae003b9d7381907af68971f8fdd3db",
+  "branch": "main",
+  "repoUrl": "https://github.com/Jason-Holt-Digital/icloud_storage_plus",
+  "generationMode": "incremental",
+  "pageCount": 33,
+  "topLevelSections": [
+    "overview",
+    "by-the-numbers",
+    "lore",
+    "how-to-contribute",
+    "features",
+    "systems",
+    "apps",
+    "deployment",
+    "security",
+    "background",
+    "reference",
+    "maintainers"
+  ],
+  "pageOrder": [
+    "overview/index.md",
+    "overview/architecture.md",
+    "overview/getting-started.md",
+    "overview/glossary.md",
+    "by-the-numbers.md",
+    "lore.md",
+    "how-to-contribute/index.md",
+    "how-to-contribute/development-workflow.md",
+    "how-to-contribute/testing.md",
+    "how-to-contribute/debugging.md",
+    "how-to-contribute/patterns-and-conventions.md",
+    "how-to-contribute/tooling.md",
+    "features/index.md",
+    "features/file-access.md",
+    "features/listing-and-metadata.md",
+    "features/document-observation.md",
+    "features/conflict-versions.md",
+    "systems/index.md",
+    "systems/dart-boundary.md",
+    "systems/native-files/index.md",
+    "systems/native-files/local-io.md",
+    "systems/native-files/observation-lifecycle.md",
+    "apps/index.md",
+    "apps/example.md",
+    "deployment.md",
+    "security.md",
+    "background/index.md",
+    "background/migrations.md",
+    "reference/index.md",
+    "reference/configuration.md",
+    "reference/data-models.md",
+    "reference/dependencies.md",
+    "maintainers.md"
+  ],
+  "videoOverview": {
+    "status": "failed",
+    "warnings": [
+      "Video overview unavailable: HyperFrames and FFmpeg/FFprobe are not installed in this environment, and no local narration engine was found. No render was attempted."
+    ]
+  },
+  "warnings": [
+    "Screenshots skipped: .factory/skills/qa/config.yaml is absent. Run /install-qa to configure repeatable capture.",
+    "Video overview unavailable because local video and narration prerequisites are missing."
+  ]
+}
