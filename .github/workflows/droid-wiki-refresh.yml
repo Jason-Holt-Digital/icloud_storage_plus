@@ -4,10 +4,10 @@ name: Droid Wiki Refresh
 on:
   workflow_dispatch:
 
-# The job that runs /wiki is read-only: the agent reads the whole repository
-# and the pages restored from the unmerged rolling branch, so it must not be
-# able to push or to open pull requests. The wiki-publish job below carries
-# the write permissions.
+# Read-only by default. The wiki-refresh job widens this to contents: write
+# because /wiki itself pushes to the GitHub wiki ({repo}.wiki.git), and a
+# wiki push needs repository write access. The wiki-publish job below opens
+# the pull request.
 permissions:
   contents: read
 
@@ -26,6 +26,8 @@ env:
 jobs:
   wiki-refresh:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
         with:
@@ -46,6 +48,20 @@ jobs:
 
       - name: Install Factory Droid
         run: curl -fsSL https://app.factory.ai/cli | sh
+
+      - name: Set up Git for the GitHub wiki push
+        # /wiki commits to and pushes {repo}.wiki.git from a fresh clone, which
+        # sees neither checkout's repository-local credentials nor an author.
+        # A credential helper, not a global extraheader: inside the checkout,
+        # a second Authorization header makes GitHub reject the request and
+        # /wiki then reports the wiki as uninitialized.
+        run: |
+          git config --global user.name 'github-actions[bot]'
+          git config --global user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          printf 'https://x-access-token:%s@github.com\n' "$GITHUB_TOKEN" > ~/.git-credentials
+          git config --global credential.helper store
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
 
       - name: Generate wiki
         run: droid exec --auto high "/wiki"
