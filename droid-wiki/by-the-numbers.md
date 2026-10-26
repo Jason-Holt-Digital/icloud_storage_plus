@@ -60,7 +60,7 @@ The test total is not a coverage percentage. Dart unit tests and Foundation harn
 
 | Surface | Count | Evidence |
 | --- | ---: | --- |
-| Publishable Dart plugin | 1 | `pubspec.yaml`: `icloud_storage_plus`, version `4.0.0` |
+| Publishable Dart plugin | 1 | `pubspec.yaml`: `icloud_storage_plus`, version `4.1.0` |
 | Nonpublishable example Dart package | 1 | `example/pubspec.yaml`: `icloud_storage_example`, `publish_to: 'none'`, local `path: ../` dependency |
 | Apple platform implementations | 2 | `pubspec.yaml`: iOS and macOS plugin registrations |
 | SwiftPM manifests | 4 | `ios/icloud_storage_plus/Package.swift`, `macos/icloud_storage_plus/Package.swift`, `ios/icloud_storage_plus/Sources/icloud_storage_plus_foundation/Package.swift`, `macos/icloud_storage_plus/Sources/icloud_storage_plus_foundation/Package.swift` |
