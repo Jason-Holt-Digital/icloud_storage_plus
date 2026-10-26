@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.1.0](https://github.com/Jason-Holt-Digital/icloud_storage_plus/compare/4.0.0...4.1.0) (2026-10-26)
+
+
+### Features
+
+* move local items into the container with setUbiquitous ([#57](https://github.com/Jason-Holt-Digital/icloud_storage_plus/issues/57)) ([7bda72c](https://github.com/Jason-Holt-Digital/icloud_storage_plus/commit/7bda72c109debcba3774bcf82cbc6399484520ce))
+* read files with plain coordinated reads and add readInPlaceBytesMany ([#59](https://github.com/Jason-Holt-Digital/icloud_storage_plus/issues/59)) ([aa24c8b](https://github.com/Jason-Holt-Digital/icloud_storage_plus/commit/aa24c8b37f0becf4eb81b8b1938eb491a55f59ee))
+
 ## [Unreleased]
 
 ### Added
