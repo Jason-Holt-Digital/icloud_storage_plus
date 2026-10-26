@@ -1856,7 +1856,14 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
       Task.detached { [self] in
         do {
           try await PerPathMutationLane.shared.withLane(for: itemURL) {
-            guard FileManager.default.fileExists(atPath: itemURL.path) else {
+            // Before iOS 17 and macOS 14, an item iCloud has not
+            // downloaded is only a hidden `.name.icloud` placeholder, and
+            // Foundation moves it out all the same.
+            let placeholderURL = itemURL.deletingLastPathComponent()
+              .appendingPathComponent(".\(itemURL.lastPathComponent).icloud")
+            guard FileManager.default.fileExists(atPath: itemURL.path)
+              || FileManager.default.fileExists(atPath: placeholderURL.path)
+            else {
               throw self.itemNotFoundError(
                 operation: "moveOutOfContainer",
                 relativePath: relativePath

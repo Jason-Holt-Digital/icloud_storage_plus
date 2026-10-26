@@ -536,6 +536,9 @@ class ICloudStorage {
   ///
   /// [localPath] is an absolute path. The item there must not exist, and its
   /// parent directory must.
+  ///
+  /// Throws [ICloudItemNotFoundException] when the container has no item at
+  /// [relativePath].
   static Future<void> moveOutOfContainer({
     required String containerId,
     required String relativePath,
