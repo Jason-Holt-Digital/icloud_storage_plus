@@ -253,8 +253,9 @@ Things to know:
   It returns `true` for folders too.
 - Use `listContents` to see what one container folder holds right now.
 
-**Turning iCloud off: copy the files out.** Use `downloadFile` (or
-`readInPlace`) to copy each file to local storage. This leaves the iCloud copy
+**Turning iCloud off: copy the files out.** Use `downloadFile` to copy each
+file to local storage. (`readInPlace` returns a file's contents instead; save
+them to a local file yourself.) This leaves the iCloud copy
 in place, so other devices that still use iCloud keep their data.
 
 Only use `moveOutOfContainer` to undo a `moveIntoContainer` that other devices

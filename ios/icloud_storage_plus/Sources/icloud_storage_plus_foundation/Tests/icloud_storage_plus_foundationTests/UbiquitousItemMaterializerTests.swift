@@ -70,6 +70,33 @@ final class UbiquitousItemMaterializerTests: XCTestCase {
         XCTAssertEqual(startDownloadCount, 0)
     }
 
+    func testPlaceholderOnlyItemRequestsDownload() throws {
+        var startDownloadCount = 0
+        let materializer = UbiquitousItemMaterializer(
+            downloadStatus: UbiquitousItemMaterializer.live.downloadStatus,
+            startDownloading: { _ in
+                startDownloadCount += 1
+            }
+        )
+        let folder = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(
+            at: folder,
+            withIntermediateDirectories: true
+        )
+        defer { try? FileManager.default.removeItem(at: folder) }
+        try Data().write(
+            to: folder.appendingPathComponent(".saved_formulas.json.icloud")
+        )
+
+        let status = try materializer.requestMaterializationIfNeeded(
+            at: folder.appendingPathComponent("saved_formulas.json")
+        )
+
+        XCTAssertEqual(status, .notDownloaded)
+        XCTAssertEqual(startDownloadCount, 1)
+    }
+
     /// VAL-MUT-032: each normal lifecycle state requests download (or
     /// returns) and raises NO error.
     func testNormalLifecycleStatesNeverBecomeErrors() throws {

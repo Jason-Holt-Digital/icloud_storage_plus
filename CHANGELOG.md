@@ -20,6 +20,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - A write that creates a new file no longer asks iCloud to download that file
   first, which logged a "doesn't exist" materialization failure.
+  An item that is only an iCloud placeholder (`.name.icloud`, before iOS 17
+  and macOS 14) still gets its download request.
 
 ## [4.0.0] - 2026-07-19
 

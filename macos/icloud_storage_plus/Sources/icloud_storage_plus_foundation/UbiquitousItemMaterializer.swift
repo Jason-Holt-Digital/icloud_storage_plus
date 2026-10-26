@@ -59,16 +59,24 @@ struct UbiquitousItemMaterializer {
 extension UbiquitousItemMaterializer {
     static let live = UbiquitousItemMaterializer(
         downloadStatus: { url in
-            // Reading the values of a missing file fails, and a missing
-            // file is not an iCloud item.
             guard
                 let values = try? url.resourceValues(forKeys: [
                     .ubiquitousItemDownloadingStatusKey,
                     .ubiquitousItemIsDownloadingKey,
                     .isUbiquitousItemKey,
-                ]),
-                values.isUbiquitousItem == true
+                ])
             else {
+                // Before iOS 17 and macOS 14, an item iCloud has not
+                // downloaded is a hidden `.name.icloud` placeholder, so the
+                // item's own path is missing. Only a path with neither is
+                // not in iCloud yet.
+                let placeholder = url.deletingLastPathComponent()
+                    .appendingPathComponent(".\(url.lastPathComponent).icloud")
+                return FileManager.default.fileExists(atPath: placeholder.path)
+                    ? .notDownloaded
+                    : .notInICloud
+            }
+            guard values.isUbiquitousItem == true else {
                 return .notInICloud
             }
 
