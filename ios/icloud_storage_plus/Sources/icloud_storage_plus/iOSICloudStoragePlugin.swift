@@ -107,6 +107,12 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
       move(call, result)
     case "copy":
       copy(call, result)
+    case "createDirectory":
+      createDirectory(call, result)
+    case "moveIntoContainer":
+      moveIntoContainer(call, result)
+    case "moveOutOfContainer":
+      moveOutOfContainer(call, result)
     case "createEventChannel":
       createEventChannel(call, result)
     case "getContainerPath":
@@ -1725,6 +1731,156 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
     return nil
   }
   
+  /// Creates a directory and missing parents in the container with a
+  /// coordinated write. Succeeds when the directory already exists.
+  private func createDirectory(
+    _ call: FlutterMethodCall,
+    _ result: @escaping FlutterResult
+  ) {
+    guard let args = call.arguments as? Dictionary<String, Any>,
+          let containerId = args["containerId"] as? String,
+          let relativePath = args["relativePath"] as? String
+    else {
+      result(argumentError(operation: "createDirectory"))
+      return
+    }
+
+    resolveContainerURL(
+      containerId: containerId,
+      operation: "createDirectory",
+      relativePath: relativePath,
+      result: result
+    ) { [self] containerURL in
+      let directoryURL = containerURL.appendingPathComponent(
+        relativePath,
+        isDirectory: true
+      )
+
+      Task.detached { [self] in
+        do {
+          try await UbiquitousItemMover.coordinatedCreateDirectory(directoryURL)
+          DispatchQueue.main.async { result(nil) }
+        } catch {
+          let mapped = self.nativeCodeError(
+            error,
+            operation: "createDirectory",
+            relativePath: relativePath
+          )
+          DispatchQueue.main.async { result(mapped) }
+        }
+      }
+    }
+  }
+
+  /// Moves a local item into the container with
+  /// `setUbiquitous(true, ...)`, serialized on the destination's
+  /// per-path lane. The native error is kept when the local item is
+  /// missing or the destination already exists.
+  private func moveIntoContainer(
+    _ call: FlutterMethodCall,
+    _ result: @escaping FlutterResult
+  ) {
+    guard let args = call.arguments as? Dictionary<String, Any>,
+          let containerId = args["containerId"] as? String,
+          let localPath = args["localPath"] as? String,
+          let relativePath = args["relativePath"] as? String
+    else {
+      result(argumentError(operation: "moveIntoContainer"))
+      return
+    }
+
+    resolveContainerURL(
+      containerId: containerId,
+      operation: "moveIntoContainer",
+      relativePath: relativePath,
+      result: result
+    ) { [self] containerURL in
+      let localURL = URL(fileURLWithPath: localPath)
+      let destinationURL = containerURL.appendingPathComponent(relativePath)
+
+      Task.detached { [self] in
+        do {
+          try await PerPathMutationLane.shared.withLane(for: destinationURL) {
+            try await UbiquitousItemMover.live.moveIntoContainer(
+              localURL: localURL,
+              destinationURL: destinationURL
+            )
+          }
+          DispatchQueue.main.async { result(nil) }
+        } catch {
+          let mapped = self.mapFileNotFoundError(
+            error,
+            operation: "moveIntoContainer",
+            relativePath: relativePath
+          ) ?? self.nativeCodeError(
+            error,
+            operation: "moveIntoContainer",
+            relativePath: relativePath
+          )
+          DispatchQueue.main.async { result(mapped) }
+        }
+      }
+    }
+  }
+
+  /// Moves a container item to a local path with
+  /// `setUbiquitous(false, ...)`, serialized on the item's per-path lane.
+  private func moveOutOfContainer(
+    _ call: FlutterMethodCall,
+    _ result: @escaping FlutterResult
+  ) {
+    guard let args = call.arguments as? Dictionary<String, Any>,
+          let containerId = args["containerId"] as? String,
+          let relativePath = args["relativePath"] as? String,
+          let localPath = args["localPath"] as? String
+    else {
+      result(argumentError(operation: "moveOutOfContainer"))
+      return
+    }
+
+    resolveContainerURL(
+      containerId: containerId,
+      operation: "moveOutOfContainer",
+      relativePath: relativePath,
+      result: result
+    ) { [self] containerURL in
+      let itemURL = containerURL.appendingPathComponent(relativePath)
+      let localURL = URL(fileURLWithPath: localPath)
+
+      Task.detached { [self] in
+        do {
+          try await PerPathMutationLane.shared.withLane(for: itemURL) {
+            // Before iOS 17 and macOS 14, an item iCloud has not
+            // downloaded is only a hidden `.name.icloud` placeholder, and
+            // Foundation moves it out all the same.
+            let placeholderURL = itemURL.deletingLastPathComponent()
+              .appendingPathComponent(".\(itemURL.lastPathComponent).icloud")
+            guard FileManager.default.fileExists(atPath: itemURL.path)
+              || FileManager.default.fileExists(atPath: placeholderURL.path)
+            else {
+              throw self.itemNotFoundError(
+                operation: "moveOutOfContainer",
+                relativePath: relativePath
+              )
+            }
+            try await UbiquitousItemMover.live.moveOutOfContainer(
+              itemURL: itemURL,
+              localURL: localURL
+            )
+          }
+          DispatchQueue.main.async { result(nil) }
+        } catch {
+          let mapped = error as? FlutterError ?? self.nativeCodeError(
+            error,
+            operation: "moveOutOfContainer",
+            relativePath: relativePath
+          )
+          DispatchQueue.main.async { result(mapped) }
+        }
+      }
+    }
+  }
+
   /// Copies an item within the container, serialized against BOTH
   /// endpoint per-path lanes (VAL-MUT-004/041/050/051/054).
   private func copy(_ call: FlutterMethodCall, _ result: @escaping FlutterResult) {

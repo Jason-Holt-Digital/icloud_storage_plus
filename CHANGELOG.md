@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `moveIntoContainer` moves a local file or directory into the container with
+  `FileManager.setUbiquitous(true, itemAt:destinationURL:)` on a background
+  queue, creating missing parent directories with a coordinated write.
+- `moveOutOfContainer` moves a container item back to a local path with
+  `setUbiquitous(false, ...)`.
+- `createDirectory` creates a container directory with a coordinated write.
+
+### Fixed
+
+- A write that creates a new file no longer asks iCloud to download that file
+  first, which logged a "doesn't exist" materialization failure.
+  An item that is only an iCloud placeholder (`.name.icloud`, before iOS 17
+  and macOS 14) still gets its download request.
+
 ## [4.0.0] - 2026-07-19
 
 ### Breaking

@@ -19,6 +19,18 @@ This package operates inside your app's local iCloud ubiquity container. Apple
 owns iCloud Drive sync, materialization, freshness, and document conflict
 behavior; this plugin performs local file operations against the container path.
 
+## What this plugin does, in plain words
+
+Your app gets its own folder in iCloud Drive, called the container. This plugin
+reads, writes, moves, copies, lists, and deletes files in that folder. Apple
+does the syncing: it uploads your changes, downloads changes from other
+devices, and decides when. The plugin never waits for a sync to finish and
+never reports "not synced yet" as an error.
+
+The core of the plugin is storing and syncing documents through iCloud Drive.
+It may grow to cover other iCloud features, such as the key-value store
+(`NSUbiquitousKeyValueStore`); there are no such methods yet.
+
 ## Platform support
 
 | Platform | Minimum version |
@@ -71,7 +83,7 @@ file exists under `Documents/`.
 
 ## Choosing the right API
 
-There are four “tiers” of API in this plugin:
+There are five “tiers” of API in this plugin:
 
 1. **Path-only transfers** for large files (no bytes returned to Dart)
    - `uploadFile` (local → iCloud)
@@ -98,7 +110,18 @@ There are four “tiers” of API in this plugin:
    - `copy()` can copy files or directories to new destinations. If you need to
      replace an existing directory tree, manage that directory explicitly rather
      than relying on overwrite replacement.
-4. **Container listing** (two complementary approaches)
+4. **Moving local items into iCloud**
+   - `moveIntoContainer` moves a local file or a whole directory into the
+     container with `FileManager.setUbiquitous(true, itemAt:destinationURL:)`.
+     It is a move, not a copy: the local item is gone afterwards. It works
+     offline, and iCloud uploads later. Missing parent directories are created
+     with a coordinated write. The destination must not exist.
+   - `moveOutOfContainer` uses `setUbiquitous(false, ...)` to move an item back
+     to a local path. This removes it from iCloud on every device, so use it to
+     undo a `moveIntoContainer`, not to turn iCloud off for data other devices
+     use. To keep the iCloud copy, use `downloadFile`.
+   - `createDirectory` makes a container directory, with a coordinated write.
+5. **Container listing** (two complementary approaches)
    - `gather` — `NSMetadataQuery`-based; can discover remote files and document
      promises and deliver updated metadata snapshots while subscribed. Update
      timing and coalescing are controlled by Apple; results remain eventually
@@ -200,6 +223,49 @@ Future<void> example() async {
   }
 }
 ```
+
+## Turning iCloud on or off in your app
+
+A common app setting is "Use iCloud". Here is the pattern Apple recommends,
+and the methods that do each step.
+
+**Turning iCloud on: move the files in.** Call `moveIntoContainer` for each
+local file or folder. It is a move, not a copy, so the local file is gone
+afterwards and there is only one copy to keep track of. It works offline: the
+move happens right away, and iCloud uploads the files when the device is back
+online.
+
+```dart
+await ICloudStorage.moveIntoContainer(
+  containerId: containerId,
+  localPath: '/path/to/app/documents/journals', // absolute path
+  relativePath: 'Documents/journals',
+);
+```
+
+Things to know:
+
+- The destination must not exist yet. If iCloud already has an item with that
+  name (for example from another device), decide in your app what to do: keep
+  both, combine them, or replace one. Then move the rest.
+- Missing parent folders in the container are created for you.
+- Use `documentExists` to check whether the container already has an item.
+  It returns `true` for folders too.
+- Use `listContents` to see what one container folder holds right now.
+
+**Turning iCloud off: copy the files out.** Use `downloadFile` to copy each
+file to local storage. (`readInPlace` returns a file's contents instead; save
+them to a local file yourself.) This leaves the iCloud copy
+in place, so other devices that still use iCloud keep their data.
+
+Only use `moveOutOfContainer` to undo a `moveIntoContainer` that other devices
+have not relied on yet. It removes the item from iCloud on **every** device.
+
+**Telling the user what is happening.** `listContents` and `getItemMetadata`
+report upload and download status from Apple. For example, a file that is on
+this device but not uploaded yet (`isUploaded == false`) can be shown as
+"Waiting to upload". Read the status when you show it; do not poll or wait for
+it to change.
 
 ## Watching document changes
 
@@ -553,6 +619,11 @@ timeout/readiness failures from them.
 - After a rename/move/delete, `gather()` may still return stale results for a
   few seconds while the Spotlight index catches up. Use `listContents()` for
   immediate consistency.
+- `moveIntoContainer` fails if the destination already exists. Check with
+  `documentExists` first and decide what your app should do with both copies.
+- An item that is not in iCloud yet (for example a file a write is about to
+  create) is not an error. The plugin only asks iCloud to download items that
+  iCloud has.
 
 ## Documentation
 

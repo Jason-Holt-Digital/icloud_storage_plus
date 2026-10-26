@@ -363,6 +363,43 @@ class MethodChannelICloudStorage extends ICloudStoragePlatform {
   }
 
   @override
+  Future<void> createDirectory({
+    required String containerId,
+    required String relativePath,
+  }) async {
+    await _invokeVoidMethod('createDirectory', {
+      'containerId': containerId,
+      'relativePath': relativePath,
+    });
+  }
+
+  @override
+  Future<void> moveIntoContainer({
+    required String containerId,
+    required String localPath,
+    required String relativePath,
+  }) async {
+    await _invokeVoidMethod('moveIntoContainer', {
+      'containerId': containerId,
+      'localPath': localPath,
+      'relativePath': relativePath,
+    });
+  }
+
+  @override
+  Future<void> moveOutOfContainer({
+    required String containerId,
+    required String relativePath,
+    required String localPath,
+  }) async {
+    await _invokeVoidMethod('moveOutOfContainer', {
+      'containerId': containerId,
+      'relativePath': relativePath,
+      'localPath': localPath,
+    });
+  }
+
+  @override
   Future<bool> documentExists({
     required String containerId,
     required String relativePath,

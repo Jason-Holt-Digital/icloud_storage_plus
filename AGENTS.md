@@ -1,7 +1,10 @@
 # iCloud Storage Plus
 
 This is a Flutter plugin for local file operations in an Apple-managed iCloud
-Drive ubiquity container on iOS and macOS. App UI, theming, routing, and telemetry
+Drive ubiquity container on iOS and macOS. Document storage and syncing
+through iCloud Drive is the core and comes first. The plugin may also cover
+other features iCloud supports, such as the key-value store
+(`NSUbiquitousKeyValueStore`). App UI, theming, routing, and telemetry
 policy are out of scope except when editing the example app.
 
 ## Ownership
