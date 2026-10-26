@@ -379,6 +379,17 @@ void main() {
         expect(fakePlatform.calls.last, 'moveIntoContainer');
       });
 
+      test('moveIntoContainer rejects a relative localPath', () async {
+        expect(
+          () async => ICloudStorage.moveIntoContainer(
+            containerId: containerId,
+            localPath: 'journals',
+            relativePath: 'Documents/journals',
+          ),
+          throwsA(isA<InvalidArgumentException>()),
+        );
+      });
+
       test('moveIntoContainer rejects an empty localPath', () async {
         expect(
           () async => ICloudStorage.moveIntoContainer(
@@ -408,6 +419,17 @@ void main() {
           localPath: '/local/journals',
         );
         expect(fakePlatform.calls.last, 'moveOutOfContainer');
+      });
+
+      test('moveOutOfContainer rejects a relative localPath', () async {
+        expect(
+          () async => ICloudStorage.moveOutOfContainer(
+            containerId: containerId,
+            relativePath: 'Documents/journals',
+            localPath: 'journals',
+          ),
+          throwsA(isA<InvalidArgumentException>()),
+        );
       });
 
       test('moveOutOfContainer rejects an empty localPath', () async {

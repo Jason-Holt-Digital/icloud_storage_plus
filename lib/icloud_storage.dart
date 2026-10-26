@@ -512,7 +512,7 @@ class ICloudStorage {
     required String localPath,
     required String relativePath,
   }) async {
-    if (localPath.trim().isEmpty) {
+    if (!localPath.startsWith('/')) {
       throw InvalidArgumentException('invalid localPath: $localPath');
     }
 
@@ -534,13 +534,14 @@ class ICloudStorage {
   /// [moveIntoContainer] that other devices have not relied on yet. To keep
   /// the iCloud item, copy it out with [downloadFile] instead.
   ///
-  /// The item at [localPath] must not exist, and its parent directory must.
+  /// [localPath] is an absolute path. The item there must not exist, and its
+  /// parent directory must.
   static Future<void> moveOutOfContainer({
     required String containerId,
     required String relativePath,
     required String localPath,
   }) async {
-    if (localPath.trim().isEmpty) {
+    if (!localPath.startsWith('/')) {
       throw InvalidArgumentException('invalid localPath: $localPath');
     }
 
