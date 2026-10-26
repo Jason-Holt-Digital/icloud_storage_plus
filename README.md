@@ -137,12 +137,14 @@ There are five “tiers” of API in this plugin:
      files with a local representation (including iCloud placeholders)
 
 On iOS and macOS, the plugin's file-system work runs off the app's main thread:
-container lookup, reads, writes, moves, existence and metadata checks, conflict
-version calls, and the request that starts a download. A file-system call in
-the iCloud container can wait for seconds while iCloud is busy, so running it on
-the main thread would freeze the app. Only work Apple requires on the main
-thread stays there: document change observation, the `gather` metadata query,
-and the document objects that copy files in and out.
+container lookup, reads, writes and uploads (including their checks before
+writing), moves, existence and metadata checks, conflict version calls, and the
+request that starts a download. A file-system call in the iCloud container can
+wait for seconds while iCloud is busy, so running it on the main thread would
+freeze the app. On iOS, the `UIDocument` objects that copy files in and out and
+document change observation stay on the main thread, as UIKit requires. On
+macOS, `NSDocument` writes run in the background and document change
+observation starts on a background queue.
 
 ## Migration notes for 4.0.0
 

@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   On a busy iCloud daemon these calls could block for seconds and freeze the
   app ([#48](https://github.com/Jason-Holt-Digital/icloud_storage_plus/issues/48)).
   Results and errors are unchanged.
+- On macOS, `uploadFile`, `writeInPlace`, and `writeInPlaceBytes` now run their
+  checks before writing off the main thread, as they already did on iOS.
 
 ## [4.1.0](https://github.com/Jason-Holt-Digital/icloud_storage_plus/compare/4.0.0...4.1.0) - 2026-10-26
 

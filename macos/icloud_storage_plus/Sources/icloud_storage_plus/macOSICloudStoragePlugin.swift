@@ -642,7 +642,13 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
     }
     let localFileURL = URL(fileURLWithPath: localFilePath)
 
-    Task { @MainActor [self] in
+    // Preflight and the materialization request touch the file system, so
+    // they run off the main thread as on iOS (#48). The document writers
+    // hop to the main queue themselves; replies go back on it here.
+    Task { [self] in
+      let reply: FlutterResult = { value in
+        DispatchQueue.main.async { result(value) }
+      }
       let cloudFileURL: URL
       do {
         cloudFileURL = try await prepareWriteEntrypointURL(
@@ -655,11 +661,13 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
           operation: "uploadFile",
           relativePath: relativePath
         )
-        failProgressStream(
-          eventChannelName: eventChannelName,
-          error: mapped
-        )
-        result(mapped)
+        await MainActor.run { [self] in
+          failProgressStream(
+            eventChannelName: eventChannelName,
+            error: mapped
+          )
+        }
+        reply(mapped)
         return
       }
 
@@ -692,23 +700,27 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
         }
         // Set up progress monitoring if needed
         if !eventChannelName.isEmpty {
-          self.setupUploadProgressMonitoring(
-            cloudFileURL: cloudFileURL,
-            eventChannelName: eventChannelName
-          )
+          await MainActor.run { [self] in
+            setupUploadProgressMonitoring(
+              cloudFileURL: cloudFileURL,
+              eventChannelName: eventChannelName
+            )
+          }
         }
-        result(nil)
+        reply(nil)
       } catch {
         let mapped = self.nativeCodeError(
           error,
           operation: "uploadFile",
           relativePath: relativePath
         )
-        self.failProgressStream(
-          eventChannelName: eventChannelName,
-          error: mapped
-        )
-        result(mapped)
+        await MainActor.run { [self] in
+          failProgressStream(
+            eventChannelName: eventChannelName,
+            error: mapped
+          )
+        }
+        reply(mapped)
       }
     }
   }
@@ -1026,7 +1038,13 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
       return
     }
 
-    Task { @MainActor [self] in
+    // Preflight and the materialization request touch the file system, so
+    // they run off the main thread as on iOS (#48). The document writers
+    // hop to the main queue themselves; replies go back on it here.
+    Task { [self] in
+      let reply: FlutterResult = { value in
+        DispatchQueue.main.async { result(value) }
+      }
       let fileURL: URL
       do {
         fileURL = try await prepareWriteEntrypointURL(
@@ -1034,7 +1052,7 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
           relativePath: relativePath
         )
       } catch {
-        result(mapWriteEntrypointPreflightError(
+        reply(mapWriteEntrypointPreflightError(
           error,
           operation: "writeInPlace",
           relativePath: relativePath
@@ -1070,9 +1088,9 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
             }
           }
         }
-        result(nil)
+        reply(nil)
       } catch {
-        result(mapNativeWriteError(
+        reply(mapNativeWriteError(
           error,
           operation: "writeInPlace",
           relativePath: relativePath,
@@ -1182,7 +1200,13 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
       return
     }
 
-    Task { @MainActor [self] in
+    // Preflight and the materialization request touch the file system, so
+    // they run off the main thread as on iOS (#48). The document writers
+    // hop to the main queue themselves; replies go back on it here.
+    Task { [self] in
+      let reply: FlutterResult = { value in
+        DispatchQueue.main.async { result(value) }
+      }
       let fileURL: URL
       do {
         fileURL = try await prepareWriteEntrypointURL(
@@ -1190,7 +1214,7 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
           relativePath: relativePath
         )
       } catch {
-        result(mapWriteEntrypointPreflightError(
+        reply(mapWriteEntrypointPreflightError(
           error,
           operation: "writeInPlaceBytes",
           relativePath: relativePath
@@ -1227,9 +1251,9 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
             }
           }
         }
-        result(nil)
+        reply(nil)
       } catch {
-        result(mapNativeWriteError(
+        reply(mapNativeWriteError(
           error,
           operation: "writeInPlaceBytes",
           relativePath: relativePath,
