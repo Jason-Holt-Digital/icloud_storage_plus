@@ -27,8 +27,9 @@ does the syncing: it uploads your changes, downloads changes from other
 devices, and decides when. The plugin never waits for a sync to finish and
 never reports "not synced yet" as an error.
 
-The plugin is for iCloud Drive files. Methods for the iCloud key-value store
-(`NSUbiquitousKeyValueStore`) may be added later; there are none yet.
+The core of the plugin is storing and syncing documents through iCloud Drive.
+It may grow to cover other iCloud features, such as the key-value store
+(`NSUbiquitousKeyValueStore`); there are no such methods yet.
 
 ## Platform support
 
