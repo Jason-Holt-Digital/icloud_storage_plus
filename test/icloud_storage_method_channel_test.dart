@@ -1423,6 +1423,40 @@ void main() {
     expect(args['toRelativePath'], 'file2');
   });
 
+  test('createDirectory', () async {
+    await platform.createDirectory(
+      containerId: containerId,
+      relativePath: 'Documents/journals',
+    );
+    final args = mockArguments();
+    expect(args['containerId'], containerId);
+    expect(args['relativePath'], 'Documents/journals');
+  });
+
+  test('moveIntoContainer', () async {
+    await platform.moveIntoContainer(
+      containerId: containerId,
+      localPath: '/local/journals',
+      relativePath: 'Documents/journals',
+    );
+    final args = mockArguments();
+    expect(args['containerId'], containerId);
+    expect(args['localPath'], '/local/journals');
+    expect(args['relativePath'], 'Documents/journals');
+  });
+
+  test('moveOutOfContainer', () async {
+    await platform.moveOutOfContainer(
+      containerId: containerId,
+      relativePath: 'Documents/journals',
+      localPath: '/local/journals',
+    );
+    final args = mockArguments();
+    expect(args['containerId'], containerId);
+    expect(args['relativePath'], 'Documents/journals');
+    expect(args['localPath'], '/local/journals');
+  });
+
   test('copy', () async {
     await platform.copy(
       containerId: containerId,

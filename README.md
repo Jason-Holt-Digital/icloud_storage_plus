@@ -71,7 +71,7 @@ file exists under `Documents/`.
 
 ## Choosing the right API
 
-There are four “tiers” of API in this plugin:
+There are five “tiers” of API in this plugin:
 
 1. **Path-only transfers** for large files (no bytes returned to Dart)
    - `uploadFile` (local → iCloud)
@@ -98,7 +98,18 @@ There are four “tiers” of API in this plugin:
    - `copy()` can copy files or directories to new destinations. If you need to
      replace an existing directory tree, manage that directory explicitly rather
      than relying on overwrite replacement.
-4. **Container listing** (two complementary approaches)
+4. **Moving local items into iCloud**
+   - `moveIntoContainer` moves a local file or a whole directory into the
+     container with `FileManager.setUbiquitous(true, itemAt:destinationURL:)`.
+     It is a move, not a copy: the local item is gone afterwards. It works
+     offline, and iCloud uploads later. Missing parent directories are created
+     with a coordinated write. The destination must not exist.
+   - `moveOutOfContainer` uses `setUbiquitous(false, ...)` to move an item back
+     to a local path. This removes it from iCloud on every device, so use it to
+     undo a `moveIntoContainer`, not to turn iCloud off for data other devices
+     use. To keep the iCloud copy, use `downloadFile`.
+   - `createDirectory` makes a container directory, with a coordinated write.
+5. **Container listing** (two complementary approaches)
    - `gather` — `NSMetadataQuery`-based; can discover remote files and document
      promises and deliver updated metadata snapshots while subscribed. Update
      timing and coalescing are controlled by Apple; results remain eventually

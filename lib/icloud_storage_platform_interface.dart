@@ -294,6 +294,59 @@ abstract class ICloudStoragePlatform extends PlatformInterface {
     throw UnimplementedError('copy() has not been implemented.');
   }
 
+  /// Create a directory, and any missing parents, in the iCloud container.
+  ///
+  /// [containerId] is the iCloud Container Id.
+  ///
+  /// [relativePath] is the relative path of the directory.
+  ///
+  /// Native and channel failures use typed `ICloudOperationException`
+  /// subclasses in the default method-channel implementation.
+  Future<void> createDirectory({
+    required String containerId,
+    required String relativePath,
+  }) async {
+    throw UnimplementedError('createDirectory() has not been implemented.');
+  }
+
+  /// Move a local item into the iCloud container with
+  /// `setUbiquitous(true, ...)`.
+  ///
+  /// [containerId] is the iCloud Container Id.
+  ///
+  /// [localPath] is the absolute path of the local file or directory.
+  ///
+  /// [relativePath] is the destination in the container. It must not exist.
+  ///
+  /// Native and channel failures use typed `ICloudOperationException`
+  /// subclasses in the default method-channel implementation.
+  Future<void> moveIntoContainer({
+    required String containerId,
+    required String localPath,
+    required String relativePath,
+  }) async {
+    throw UnimplementedError('moveIntoContainer() has not been implemented.');
+  }
+
+  /// Move an item out of the iCloud container to a local path with
+  /// `setUbiquitous(false, ...)`.
+  ///
+  /// [containerId] is the iCloud Container Id.
+  ///
+  /// [relativePath] is the item in the container.
+  ///
+  /// [localPath] is the absolute local destination. It must not exist.
+  ///
+  /// Native and channel failures use typed `ICloudOperationException`
+  /// subclasses in the default method-channel implementation.
+  Future<void> moveOutOfContainer({
+    required String containerId,
+    required String relativePath,
+    required String localPath,
+  }) async {
+    throw UnimplementedError('moveOutOfContainer() has not been implemented.');
+  }
+
   /// Check if a file or directory exists without downloading
   ///
   /// [containerId] is the iCloud Container Id.

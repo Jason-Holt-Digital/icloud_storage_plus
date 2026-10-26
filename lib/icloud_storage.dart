@@ -477,6 +477,84 @@ class ICloudStorage {
     );
   }
 
+  /// Create a directory, and any missing parent directories, in the iCloud
+  /// container with a coordinated write.
+  ///
+  /// Succeeds when the directory already exists.
+  static Future<void> createDirectory({
+    required String containerId,
+    required String relativePath,
+  }) async {
+    if (!_validateRelativePath(relativePath)) {
+      throw InvalidArgumentException('invalid relativePath: $relativePath');
+    }
+
+    await ICloudStoragePlatform.instance.createDirectory(
+      containerId: containerId,
+      relativePath: relativePath,
+    );
+  }
+
+  /// Move a local file or directory into the iCloud container with
+  /// `FileManager.setUbiquitous(true, itemAt:destinationURL:)`.
+  ///
+  /// [localPath] is the absolute path of the item outside the container. It is
+  /// removed from that location when the move succeeds. A directory moves with
+  /// all its contents in one call.
+  ///
+  /// [relativePath] is where the item goes in the container. Missing parent
+  /// directories are created with a coordinated write. The item at
+  /// [relativePath] must not exist; Foundation refuses to replace it.
+  ///
+  /// The move works offline. iCloud uploads the item later.
+  static Future<void> moveIntoContainer({
+    required String containerId,
+    required String localPath,
+    required String relativePath,
+  }) async {
+    if (localPath.trim().isEmpty) {
+      throw InvalidArgumentException('invalid localPath: $localPath');
+    }
+
+    if (!_validateRelativePath(relativePath)) {
+      throw InvalidArgumentException('invalid relativePath: $relativePath');
+    }
+
+    await ICloudStoragePlatform.instance.moveIntoContainer(
+      containerId: containerId,
+      localPath: localPath,
+      relativePath: relativePath,
+    );
+  }
+
+  /// Move a file or directory out of the iCloud container to a local path with
+  /// `FileManager.setUbiquitous(false, itemAt:destinationURL:)`.
+  ///
+  /// This removes the item from iCloud on every device. Use it to undo a
+  /// [moveIntoContainer] that other devices have not relied on yet. To keep
+  /// the iCloud item, copy it out with [downloadFile] instead.
+  ///
+  /// The item at [localPath] must not exist, and its parent directory must.
+  static Future<void> moveOutOfContainer({
+    required String containerId,
+    required String relativePath,
+    required String localPath,
+  }) async {
+    if (localPath.trim().isEmpty) {
+      throw InvalidArgumentException('invalid localPath: $localPath');
+    }
+
+    if (!_validateRelativePath(relativePath)) {
+      throw InvalidArgumentException('invalid relativePath: $relativePath');
+    }
+
+    await ICloudStoragePlatform.instance.moveOutOfContainer(
+      containerId: containerId,
+      relativePath: relativePath,
+      localPath: localPath,
+    );
+  }
+
   /// Check if a file or directory exists without downloading.
   ///
   /// Trailing slashes are allowed for directory paths returned by metadata.
