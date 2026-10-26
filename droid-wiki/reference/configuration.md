@@ -6,7 +6,7 @@ The plugin's manifests select platform implementations and deployment floors. A 
 
 | Setting | Declared value | Source |
 | --- | --- | --- |
-| Package version | `4.0.0` | `pubspec.yaml` |
+| Package version | `4.1.0` | `pubspec.yaml` |
 | Dart | `>=3.0.0 <4.0.0` | `pubspec.yaml` |
 | Flutter | `>=3.10.0` | `pubspec.yaml` |
 | iOS | `13.0` | `ios/icloud_storage_plus.podspec`, `ios/icloud_storage_plus/Package.swift` |
