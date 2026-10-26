@@ -48,6 +48,28 @@ final class UbiquitousItemMaterializerTests: XCTestCase {
         XCTAssertEqual(startDownloadCount, 0)
     }
 
+    /// A write that creates a file does not request a download of the
+    /// file it is about to create.
+    func testMissingItemDoesNotRequestDownload() throws {
+        var startDownloadCount = 0
+        let materializer = UbiquitousItemMaterializer(
+            downloadStatus: UbiquitousItemMaterializer.live.downloadStatus,
+            startDownloading: { _ in
+                startDownloadCount += 1
+            }
+        )
+        let missing = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString)
+            .appendingPathComponent("saved_formulas.json")
+
+        let status = try materializer.requestMaterializationIfNeeded(
+            at: missing
+        )
+
+        XCTAssertEqual(status, .notInICloud)
+        XCTAssertEqual(startDownloadCount, 0)
+    }
+
     /// VAL-MUT-032: each normal lifecycle state requests download (or
     /// returns) and raises NO error.
     func testNormalLifecycleStatesNeverBecomeErrors() throws {

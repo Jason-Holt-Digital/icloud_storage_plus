@@ -16,6 +16,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `setUbiquitous(false, ...)`.
 - `createDirectory` creates a container directory with a coordinated write.
 
+### Fixed
+
+- A write that creates a new file no longer asks iCloud to download that file
+  first, which logged a "doesn't exist" materialization failure.
+
 ## [4.0.0] - 2026-07-19
 
 ### Breaking
