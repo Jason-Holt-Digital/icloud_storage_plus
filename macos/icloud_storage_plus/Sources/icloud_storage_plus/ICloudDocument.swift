@@ -507,32 +507,6 @@ extension ICloudStoragePlugin {
         }
     }
 
-    /// Read a document in place using NSDocument coordination.
-    func readInPlaceDocument(
-        at url: URL,
-        completion: @escaping (String?, Error?) -> Void
-    ) {
-        let document = ICloudInPlaceDocument()
-
-        // NSDocument reads synchronously; run off the main thread and rely on
-        // its default URL->data read chain (read(from:ofType:) -> read(from:Data:)).
-        DispatchQueue.global(qos: .userInitiated).async {
-            do {
-                try document.read(from: url, ofType: "public.data")
-                let contents = document.textContents
-                DispatchQueue.main.async {
-                    document.close()
-                    completion(contents, nil)
-                }
-            } catch {
-                DispatchQueue.main.async {
-                    document.close()
-                    completion(nil, error)
-                }
-            }
-        }
-    }
-
     /// Write a document in place using NSDocument coordination.
     func writeInPlaceDocument(
         at url: URL,
@@ -577,30 +551,6 @@ extension ICloudStoragePlugin {
                 DispatchQueue.main.async {
                     document.close()
                     completion(error)
-                }
-            }
-        }
-    }
-
-    /// Read a binary document in place using NSDocument coordination.
-    func readInPlaceBinaryDocument(
-        at url: URL,
-        completion: @escaping (Data?, Error?) -> Void
-    ) {
-        let document = ICloudInPlaceBinaryDocument()
-
-        DispatchQueue.global(qos: .userInitiated).async {
-            do {
-                try document.read(from: url, ofType: "public.data")
-                let contents = document.dataContents
-                DispatchQueue.main.async {
-                    document.close()
-                    completion(contents, nil)
-                }
-            } catch {
-                DispatchQueue.main.async {
-                    document.close()
-                    completion(nil, error)
                 }
             }
         }

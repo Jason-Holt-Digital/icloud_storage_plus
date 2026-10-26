@@ -115,9 +115,9 @@ Definition: count named, non-underscore, top-level type declarations **declared 
 | `lib/models/transfer_progress.dart` | 2 |
 | **Total** | **21** |
 
-Separately, `ICloudStorage` declares **20 public static asynchronous methods**:
+Separately, `ICloudStorage` declares **24 public static asynchronous methods**:
 
-`icloudAvailable`, `gather`, `watchDocumentChanges`, `getContainerPath`, `uploadFile`, `downloadFile`, `readInPlace`, `readInPlaceBytes`, `writeInPlace`, `writeInPlaceBytes`, `delete`, `move`, `rename`, `copy`, `documentExists`, `getItemMetadata`, `listContents`, `enumerateUnresolvedConflictVersions`, `copyConflictVersion`, and `markConflictResolved`.
+`icloudAvailable`, `gather`, `watchDocumentChanges`, `getContainerPath`, `uploadFile`, `downloadFile`, `readInPlace`, `readInPlaceBytes`, `readInPlaceBytesMany`, `writeInPlace`, `writeInPlaceBytes`, `delete`, `move`, `rename`, `copy`, `createDirectory`, `moveIntoContainer`, `moveOutOfContainer`, `documentExists`, `getItemMetadata`, `listContents`, `enumerateUnresolvedConflictVersions`, `copyConflictVersion`, and `markConflictResolved`.
 
 These are not added to the type count. For example, `StreamHandler` is declared in `lib/icloud_storage_platform_interface.dart`, which the facade imports but does not export; this entry-library metric does not count that typedef.
 

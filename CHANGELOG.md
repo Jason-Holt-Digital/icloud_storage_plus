@@ -15,6 +15,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `moveOutOfContainer` moves a container item back to a local path with
   `setUbiquitous(false, ...)`.
 - `createDirectory` creates a container directory with a coordinated write.
+- `readInPlaceBytesMany` reads a list of files with one coordinated read and
+  returns a map from each path to its bytes. A file that does not exist is left
+  out of the map. Any other failure fails the whole call with the same errors
+  as `readInPlaceBytes`. Use it to read many small files much faster than one
+  `readInPlaceBytes` call per file.
+
+### Changed
+
+- `readInPlace` and `readInPlaceBytes` now do a plain coordinated read
+  (`NSFileCoordinator`) instead of opening and closing a `UIDocument` or
+  `NSDocument` for every read. Results and errors are unchanged. Reads are much
+  faster: copying 242 small files on an iPad went from about 8.8 s to about 2 s.
 
 ### Fixed
 

@@ -13,6 +13,15 @@ enum CoordinateBridgeError: Error {
     case accessor(Error)
 }
 
+/// A file inside a `CoordinatedIO.readFilesIfPresent` batch could not be
+/// read for a reason other than not existing.
+struct CoordinatedBatchReadFailure: Error {
+    /// Position of the failing URL in the input list.
+    let index: Int
+    /// The error from reading that file.
+    let error: Error
+}
+
 /// Async bridges for `NSFileCoordinator.coordinate(...)` (synchronous,
 /// blocking) that hop the blocking call onto a `DispatchQueue.global`
 /// worker via a single-resume continuation, so the Swift cooperative
@@ -154,6 +163,57 @@ enum CoordinatedIO {
             }
         }
     }
+
+    /// Reads every file in `urls` under one coordinated batch using
+    /// `coordinate(with:queue:byAccessor:)` with one reading intent per
+    /// file, so a large set of small files pays the coordination cost once.
+    ///
+    /// Returns one entry per input URL, in input order. An entry is `nil`
+    /// when the file does not exist. Any other read failure stops the batch
+    /// and throws `CoordinatedBatchReadFailure` naming the failing index. A
+    /// coordination failure is thrown as the coordinator's own error.
+    static func readFilesIfPresent(at urls: [URL]) async throws -> [Data?] {
+        let intents = urls.map { NSFileAccessIntent.readingIntent(with: $0, options: []) }
+        let coordinator = NSFileCoordinator(filePresenter: nil)
+        return try await withCheckedThrowingContinuation {
+            (continuation: CheckedContinuation<[Data?], Error>) in
+            coordinator.coordinate(with: intents, queue: batchReadQueue) { coordinationError in
+                // Holds the coordinator until Foundation runs this accessor.
+                _ = coordinator
+                if let coordinationError {
+                    continuation.resume(throwing: coordinationError)
+                    return
+                }
+                var contents: [Data?] = []
+                contents.reserveCapacity(intents.count)
+                for (index, intent) in intents.enumerated() {
+                    do {
+                        contents.append(try Data(contentsOf: intent.url))
+                    } catch let error as NSError
+                        where error.domain == NSCocoaErrorDomain
+                        && (error.code == NSFileReadNoSuchFileError
+                            || error.code == NSFileNoSuchFileError) {
+                        contents.append(nil)
+                    } catch {
+                        continuation.resume(
+                            throwing: CoordinatedBatchReadFailure(index: index, error: error)
+                        )
+                        return
+                    }
+                }
+                continuation.resume(returning: contents)
+            }
+        }
+    }
+
+    /// The accessor for `readFilesIfPresent` runs here, never on the main
+    /// queue, so large batches do not block the UI.
+    private static let batchReadQueue: OperationQueue = {
+        let queue = OperationQueue()
+        queue.name = "icloud_storage_plus.coordinatedBatchRead"
+        queue.qualityOfService = .userInitiated
+        return queue
+    }()
 
     /// Bridges
     /// `coordinate(readingItemAt:options:writingItemAt:options:error:byAccessor:)`

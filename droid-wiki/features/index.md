@@ -12,6 +12,7 @@ Choose among four capabilities: [file access](file-access.md), [listing and meta
 | Check availability or locate the container | `icloudAvailable`, `getContainerPath` | Check availability before operations; configure the app's entitlements first |
 | Copy a large file into or out of the container | `uploadFile`, `downloadFile` | Paths cross Flutter channels, not file bytes; copies do not create a continuing sync relationship |
 | Read or write small text/binary content | `readInPlace`, `readInPlaceBytes`, `writeInPlace`, `writeInPlaceBytes` | Entire contents are held in memory and cross the channel |
+| Read many small files at once | `readInPlaceBytesMany` | One coordinated read for the whole list; missing files are left out of the result; any other failure fails the call |
 | Manage local entries | `delete`, `move`, `rename`, `copy` | Files and directories are supported; existing-directory copy replacement is not |
 | Turn iCloud on for local files | `moveIntoContainer` | A move, not a copy; works offline; the destination must not exist |
 | Make a container folder | `createDirectory` | Creates missing parents too; succeeds when the folder already exists |
