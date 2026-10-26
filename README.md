@@ -136,11 +136,13 @@ There are five “tiers” of API in this plugin:
      mutations; returns download/upload status via URL resource values; only sees
      files with a local representation (including iCloud placeholders)
 
-On iOS, when Flutter provides a background platform-channel task queue, native
-filesystem work for the in-place APIs runs there so iCloud container lookup and
-write preflight do not block the app's main thread. If that queue is not
-available, Flutter falls back to its default platform-channel dispatch model.
-macOS keeps the existing dispatch model.
+On iOS and macOS, the plugin's file-system work runs off the app's main thread:
+container lookup, reads, writes, moves, existence and metadata checks, conflict
+version calls, and the request that starts a download. A file-system call in
+the iCloud container can wait for seconds while iCloud is busy, so running it on
+the main thread would freeze the app. Only work Apple requires on the main
+thread stays there: document change observation, the `gather` metadata query,
+and the document objects that copy files in and out.
 
 ## Migration notes for 4.0.0
 

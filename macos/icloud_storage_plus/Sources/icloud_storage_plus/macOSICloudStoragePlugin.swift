@@ -188,6 +188,22 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
     }
   }
 
+  /// Runs synchronous file-system work on a background queue and sends its
+  /// result back on the main queue.
+  ///
+  /// `resolveContainerURL` calls back on the main actor, and a file-system
+  /// call on the ubiquity container can block for seconds while the iCloud
+  /// daemon is busy, which freezes the whole app (issue #48).
+  private func respondOffMain(
+    _ result: @escaping FlutterResult,
+    _ work: @escaping () -> Any?
+  ) {
+    DispatchQueue.global(qos: .userInitiated).async {
+      let value = work()
+      DispatchQueue.main.async { result(value) }
+    }
+  }
+
   /// Returns the filesystem path for the iCloud container.
   private func getContainerPath(_ call: FlutterMethodCall, _ result: @escaping FlutterResult){
     guard let args = call.arguments as? Dictionary<String, Any>,
@@ -815,103 +831,117 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
 
       let cloudFileURL = containerURL.appendingPathComponent(relativePath)
       let localFileURL = URL(fileURLWithPath: localFilePath)
-      do {
-        try FileManager.default.startDownloadingUbiquitousItem(at: cloudFileURL)
-      } catch {
-        let mapped = mapFileNotFoundError(
-          error,
-          operation: "downloadFile",
-          relativePath: relativePath
-        ) ?? nativeCodeError(
-          error,
-          operation: "downloadFile",
-          relativePath: relativePath
-        )
-        failProgressStream(
-          eventChannelName: eventChannelName,
-          error: mapped
-        )
-        result(mapped)
-        return
-      }
-
-      let completionGate = CompletionGate()
-      let completeOnce: (Any?) -> Void = { value in
-        guard completionGate.tryComplete() else {
-          return
-        }
-        result(value)
-      }
-
-      let downloadSession: MetadataQuerySession? = eventChannelName.isEmpty
-        ? nil
-        : {
-            let query = NSMetadataQuery()
-            query.operationQueue = .main
-            query.searchScopes = querySearchScopes
-            query.predicate = NSPredicate(
-              format: "%K == %@",
-              NSMetadataItemPathKey,
-              cloudFileURL.path
-            )
-            return makeMetadataQuerySession(query: query)
-          }()
-
-      let downloadStreamHandler = registeredStreamHandler(for: eventChannelName)
-      if let downloadSession {
-        downloadStreamHandler?.onCancelHandler = {
-          [weak self, weak downloadSession] in
-          guard let self else { return }
-          // Cancelling the progress stream stops progress monitoring only.
-          // The copy-out is not cancellable, so let readDocumentAt drive the
-          // final result instead of reporting a cancellation while the file
-          // is still being written to localFileURL.
-          downloadSession?.cancel()
-          self.removeStreamHandler(eventChannelName)
-        }
-      }
-
-      if let downloadSession {
-        addDownloadObservers(
-          session: downloadSession,
-          eventChannelName: eventChannelName
-        )
-        downloadSession.start()
-      }
-      if downloadStreamHandler != nil {
-        emitProgress(10.0, eventChannelName: eventChannelName)
-      }
-
-      readDocumentAt(url: cloudFileURL, destinationURL: localFileURL) {
-        [self] error in
-        if completionGate.isCompleted {
-          return
-        }
-        if let error = error {
-          let mapped = mapFileNotFoundError(
-            error,
-            operation: "downloadFile",
-            relativePath: relativePath
-          ) ?? nativeCodeError(
-            error,
-            operation: "downloadFile",
-            relativePath: relativePath
+      // Asking iCloud to start a download touches the file system and
+      // can block while the daemon is busy, so it runs off the main
+      // thread (#48). The progress query and the copy-out stay on main.
+      DispatchQueue.global(qos: .userInitiated).async { [self] in
+        var startError: Error?
+        do {
+          try FileManager.default.startDownloadingUbiquitousItem(
+            at: cloudFileURL
           )
-          downloadStreamHandler?.finish(with: [
-            mapped,
-            FlutterEndOfEventStream,
-          ])
-          downloadSession?.cancel()
-          removeStreamHandler(eventChannelName)
-          completeOnce(mapped)
-          return
+        } catch {
+          startError = error
         }
+        DispatchQueue.main.async { [self] in
+          if let startError {
+            let error = startError
+            let mapped = mapFileNotFoundError(
+              error,
+              operation: "downloadFile",
+              relativePath: relativePath
+            ) ?? nativeCodeError(
+              error,
+              operation: "downloadFile",
+              relativePath: relativePath
+            )
+            failProgressStream(
+              eventChannelName: eventChannelName,
+              error: mapped
+            )
+            result(mapped)
+            return
+          }
 
-        emitProgress(100.0, eventChannelName: eventChannelName)
-        downloadStreamHandler?.finish(with: [FlutterEndOfEventStream])
-        downloadSession?.cancel()
-        removeStreamHandler(eventChannelName)
-        completeOnce(nil)
+          let completionGate = CompletionGate()
+          let completeOnce: (Any?) -> Void = { value in
+            guard completionGate.tryComplete() else {
+              return
+            }
+            result(value)
+          }
+
+          let downloadSession: MetadataQuerySession? = eventChannelName.isEmpty
+            ? nil
+            : {
+                let query = NSMetadataQuery()
+                query.operationQueue = .main
+                query.searchScopes = querySearchScopes
+                query.predicate = NSPredicate(
+                  format: "%K == %@",
+                  NSMetadataItemPathKey,
+                  cloudFileURL.path
+                )
+                return makeMetadataQuerySession(query: query)
+              }()
+
+          let downloadStreamHandler = registeredStreamHandler(for: eventChannelName)
+          if let downloadSession {
+            downloadStreamHandler?.onCancelHandler = {
+              [weak self, weak downloadSession] in
+              guard let self else { return }
+              // Cancelling the progress stream stops progress monitoring only.
+              // The copy-out is not cancellable, so let readDocumentAt drive the
+              // final result instead of reporting a cancellation while the file
+              // is still being written to localFileURL.
+              downloadSession?.cancel()
+              self.removeStreamHandler(eventChannelName)
+            }
+          }
+
+          if let downloadSession {
+            addDownloadObservers(
+              session: downloadSession,
+              eventChannelName: eventChannelName
+            )
+            downloadSession.start()
+          }
+          if downloadStreamHandler != nil {
+            emitProgress(10.0, eventChannelName: eventChannelName)
+          }
+
+          readDocumentAt(url: cloudFileURL, destinationURL: localFileURL) {
+            [self] error in
+            if completionGate.isCompleted {
+              return
+            }
+            if let error = error {
+              let mapped = mapFileNotFoundError(
+                error,
+                operation: "downloadFile",
+                relativePath: relativePath
+              ) ?? nativeCodeError(
+                error,
+                operation: "downloadFile",
+                relativePath: relativePath
+              )
+              downloadStreamHandler?.finish(with: [
+                mapped,
+                FlutterEndOfEventStream,
+              ])
+              downloadSession?.cancel()
+              removeStreamHandler(eventChannelName)
+              completeOnce(mapped)
+              return
+            }
+
+            emitProgress(100.0, eventChannelName: eventChannelName)
+            downloadStreamHandler?.finish(with: [FlutterEndOfEventStream])
+            downloadSession?.cancel()
+            removeStreamHandler(eventChannelName)
+            completeOnce(nil)
+          }
+        }
       }
     }
   }
@@ -1268,9 +1298,11 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
       operation: "documentExists",
       relativePath: relativePath,
       result: result
-    ) { containerURL in
+    ) { [self] containerURL in
       let fileURL = containerURL.appendingPathComponent(relativePath)
-      result(FileManager.default.fileExists(atPath: fileURL.path))
+      respondOffMain(result) {
+        FileManager.default.fileExists(atPath: fileURL.path)
+      }
     }
   }
 
@@ -1295,39 +1327,40 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
       result: result
     ) { [self] containerURL in
       let fileURL = containerURL.appendingPathComponent(relativePath)
-      guard FileManager.default.fileExists(atPath: fileURL.path) else {
-        result(nil)
-        return
-      }
+      respondOffMain(result) { [self] () -> Any? in
+        guard FileManager.default.fileExists(atPath: fileURL.path) else {
+          return nil
+        }
 
-      do {
-        let values = try fileURL.resourceValues(forKeys: [
-          .isDirectoryKey,
-          .fileSizeKey,
-          .creationDateKey,
-          .contentModificationDateKey,
-          .ubiquitousItemDownloadingStatusKey,
-          .ubiquitousItemIsDownloadingKey,
-          .ubiquitousItemIsUploadedKey,
-          .ubiquitousItemIsUploadingKey,
-          .ubiquitousItemHasUnresolvedConflictsKey,
-        ])
-        let containerPath = containerURL.standardizedFileURL.path
-        var metadata = mapResourceValues(
-          fileURL: fileURL,
-          values: values,
-          containerPath: containerPath
-        )
-        metadata["downloadStatus"] = normalizeDownloadStatus(
-          values.ubiquitousItemDownloadingStatus
-        )
-        result(metadata)
-      } catch {
-        result(nativeCodeError(
-          error,
-          operation: "getItemMetadata",
-          relativePath: relativePath
-        ))
+        do {
+          let values = try fileURL.resourceValues(forKeys: [
+            .isDirectoryKey,
+            .fileSizeKey,
+            .creationDateKey,
+            .contentModificationDateKey,
+            .ubiquitousItemDownloadingStatusKey,
+            .ubiquitousItemIsDownloadingKey,
+            .ubiquitousItemIsUploadedKey,
+            .ubiquitousItemIsUploadingKey,
+            .ubiquitousItemHasUnresolvedConflictsKey,
+          ])
+          let containerPath = containerURL.standardizedFileURL.path
+          var metadata = mapResourceValues(
+            fileURL: fileURL,
+            values: values,
+            containerPath: containerPath
+          )
+          metadata["downloadStatus"] = normalizeDownloadStatus(
+            values.ubiquitousItemDownloadingStatus
+          )
+          return metadata
+        } catch {
+          return nativeCodeError(
+            error,
+            operation: "getItemMetadata",
+            relativePath: relativePath
+          )
+        }
       }
     }
   }
@@ -1457,23 +1490,25 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
       operation: "enumerateUnresolvedConflictVersions",
       relativePath: relativePath,
       result: result
-    ) { containerURL in
+    ) { [self] containerURL in
       let fileURL = containerURL.appendingPathComponent(relativePath)
-      do {
-        let descriptors = try VersionExposure.live.enumerate(at: fileURL)
-        result(descriptors.map { descriptor -> [String: Any?] in
-          [
-            "identifier": descriptor.identifier,
-            "modificationDate": descriptor.modificationDate?
-              .timeIntervalSince1970,
-          ]
-        })
-      } catch {
-        result(self.nativeCodeError(
-          error,
-          operation: "enumerateUnresolvedConflictVersions",
-          relativePath: relativePath
-        ))
+      respondOffMain(result) { [self] () -> Any? in
+        do {
+          let descriptors = try VersionExposure.live.enumerate(at: fileURL)
+          return descriptors.map { descriptor -> [String: Any?] in
+            [
+              "identifier": descriptor.identifier,
+              "modificationDate": descriptor.modificationDate?
+                .timeIntervalSince1970,
+            ]
+          }
+        } catch {
+          return self.nativeCodeError(
+            error,
+            operation: "enumerateUnresolvedConflictVersions",
+            relativePath: relativePath
+          )
+        }
       }
     }
   }
@@ -1499,30 +1534,32 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
       operation: "copyConflictVersion",
       relativePath: relativePath,
       result: result
-    ) { containerURL in
+    ) { [self] containerURL in
       let fileURL = containerURL.appendingPathComponent(relativePath)
       let destinationURL = URL(fileURLWithPath: destinationPath)
-      do {
-        let destinationDir = destinationURL.deletingLastPathComponent()
-        if !FileManager.default.fileExists(atPath: destinationDir.path) {
-          try FileManager.default.createDirectory(
-            at: destinationDir,
-            withIntermediateDirectories: true,
-            attributes: nil
+      respondOffMain(result) { [self] () -> Any? in
+        do {
+          let destinationDir = destinationURL.deletingLastPathComponent()
+          if !FileManager.default.fileExists(atPath: destinationDir.path) {
+            try FileManager.default.createDirectory(
+              at: destinationDir,
+              withIntermediateDirectories: true,
+              attributes: nil
+            )
+          }
+          try VersionExposure.live.copyOut(
+            itemURL: fileURL,
+            identifier: versionIdentifier,
+            to: destinationURL
+          )
+          return nil
+        } catch {
+          return self.nativeCodeError(
+            error,
+            operation: "copyConflictVersion",
+            relativePath: relativePath
           )
         }
-        try VersionExposure.live.copyOut(
-          itemURL: fileURL,
-          identifier: versionIdentifier,
-          to: destinationURL
-        )
-        result(nil)
-      } catch {
-        result(self.nativeCodeError(
-          error,
-          operation: "copyConflictVersion",
-          relativePath: relativePath
-        ))
       }
     }
   }
@@ -1548,20 +1585,22 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
       operation: "markConflictResolved",
       relativePath: relativePath,
       result: result
-    ) { containerURL in
+    ) { [self] containerURL in
       let fileURL = containerURL.appendingPathComponent(relativePath)
-      do {
-        try VersionExposure.live.markResolved(
-          at: fileURL,
-          removeOthers: removeOtherVersions
-        )
-        result(nil)
-      } catch {
-        result(self.nativeCodeError(
-          error,
-          operation: "markConflictResolved",
-          relativePath: relativePath
-        ))
+      respondOffMain(result) { [self] () -> Any? in
+        do {
+          try VersionExposure.live.markResolved(
+            at: fileURL,
+            removeOthers: removeOtherVersions
+          )
+          return nil
+        } catch {
+          return self.nativeCodeError(
+            error,
+            operation: "markConflictResolved",
+            relativePath: relativePath
+          )
+        }
       }
     }
   }

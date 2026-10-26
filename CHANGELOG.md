@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- `documentExists`, `getItemMetadata`, `downloadFile` (starting the download),
+  `enumerateUnresolvedConflictVersions`, `copyConflictVersion`, and
+  `markConflictResolved` no longer touch the file system on the main thread.
+  On a busy iCloud daemon these calls could block for seconds and freeze the
+  app ([#48](https://github.com/Jason-Holt-Digital/icloud_storage_plus/issues/48)).
+  Results and errors are unchanged.
+
 ## [4.1.0](https://github.com/Jason-Holt-Digital/icloud_storage_plus/compare/4.0.0...4.1.0) - 2026-10-26
 
 ### Added
