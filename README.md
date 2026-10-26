@@ -91,7 +91,13 @@ There are five “tiers” of API in this plugin:
 2. **In-place content** for small files (bytes/strings cross the platform
    channel; loads full contents in memory)
     - `readInPlace`, `readInPlaceBytes`
+    - `readInPlaceBytesMany` reads a list of files with one coordinated read
+      and returns a map from each path to its bytes. Files that do not exist
+      are left out of the map. See
+      [Reading many small files](#reading-many-small-files).
     - `writeInPlace`, `writeInPlaceBytes`
+    - Reads use a plain coordinated read (`NSFileCoordinator`), not a
+      `UIDocument`/`NSDocument`, so each read is cheap.
     - On iOS and macOS, existing-file writes stage the complete new content and
       install it with `FileManager.replaceItemAt` under coordinated ordinary-write
       access. This preserves the destination relative path, but is not a
@@ -132,7 +138,7 @@ There are five “tiers” of API in this plugin:
 
 On iOS, when Flutter provides a background platform-channel task queue, native
 filesystem work for the in-place APIs runs there so iCloud container lookup and
-`UIDocument` preflight do not block the app's main thread. If that queue is not
+write preflight do not block the app's main thread. If that queue is not
 available, Flutter falls back to its default platform-channel dispatch model.
 macOS keeps the existing dispatch model.
 
@@ -362,6 +368,38 @@ await ICloudStorage.uploadFile(
 );
 ```
 
+## Reading many small files
+
+`readInPlaceBytesMany` reads many files in one call. It coordinates all of them
+together, which is much faster than calling `readInPlaceBytes` once per file
+when you copy a folder of small documents.
+
+```dart
+final contents = await ICloudStorage.readInPlaceBytesMany(
+  containerId: containerId,
+  relativePaths: [
+    'Documents/journal/index.json',
+    'Documents/journal/entry-1.json',
+    'Documents/journal/entry-2.json',
+  ],
+);
+
+// Keys are the paths exactly as you passed them.
+// A path with no file is not in the map, so this is null when it is missing.
+final Uint8List? index = contents['Documents/journal/index.json'];
+```
+
+- The result has an entry only for files that exist. A missing file is not an
+  error.
+- Any other failure (for example a path that is a folder, no permission, or a
+  failed coordinated read) fails the whole call with the same
+  `ICloudOperationException` types `readInPlaceBytes` throws. When the failure
+  belongs to one file, the exception's `relativePath` names it.
+- Each path is checked like `readInPlaceBytes` checks its path. An invalid path
+  throws `InvalidArgumentException` before anything is read.
+- An empty list returns an empty map.
+- Every file is loaded into memory at once, so use it for small files.
+
 ## Container-relative paths
 
 This plugin consistently uses `relativePath` for paths inside the iCloud
@@ -377,7 +415,8 @@ directory-oriented methods accept them:
 File-centric operations reject trailing slashes (they require a file path):
 
 - `uploadFile`, `downloadFile`
-- `readInPlace`, `readInPlaceBytes`, `writeInPlace`, `writeInPlaceBytes`
+- `readInPlace`, `readInPlaceBytes`, `readInPlaceBytesMany`, `writeInPlace`,
+  `writeInPlaceBytes`
 
 On iOS and macOS, file-centric overwrite operations reject an existing directory
 destination instead of replacing it. Existing-destination `copy()` replacement
@@ -575,8 +614,8 @@ occur before native allocation.
 
 Native method-channel failures, event-channel failures, and malformed channel
 payloads map to typed exceptions. This applies to request/response APIs such as
-`icloudAvailable`, `readInPlace`, `writeInPlace`, `copy`, `getContainerPath`,
-and `getItemMetadata`, plus `gather`, document-change, and transfer streams:
+`icloudAvailable`, `readInPlace`, `readInPlaceBytesMany`, `writeInPlace`, `copy`,
+`getContainerPath`, and `getItemMetadata`, plus `gather`, document-change, and transfer streams:
 
 - `ICloudContainerAccessException`
 - `ICloudItemNotFoundException`

@@ -122,6 +122,20 @@ class MockICloudStoragePlatform
     return Uint8List.fromList([1, 2, 3]);
   }
 
+  List<String> readInPlaceBytesManyRelativePaths = [];
+
+  @override
+  Future<Map<String, Uint8List>> readInPlaceBytesMany({
+    required String containerId,
+    required List<String> relativePaths,
+  }) async {
+    readInPlaceBytesManyRelativePaths = relativePaths;
+    _calls.add('readInPlaceBytesMany');
+    return {
+      relativePaths.first: Uint8List.fromList([4, 5]),
+    };
+  }
+
   @override
   Future<void> writeInPlace({
     required String containerId,
@@ -596,6 +610,45 @@ void main() {
           throwsA(isA<InvalidArgumentException>()),
         );
       });
+
+      test('readInPlaceBytesMany forwards the paths as passed', () async {
+        final result = await ICloudStorage.readInPlaceBytesMany(
+          containerId: containerId,
+          relativePaths: ['Documents/a.json', 'Documents/b.json'],
+        );
+        expect(result, {
+          'Documents/a.json': Uint8List.fromList([4, 5]),
+        });
+        expect(
+          fakePlatform.readInPlaceBytesManyRelativePaths,
+          ['Documents/a.json', 'Documents/b.json'],
+        );
+        expect(fakePlatform.calls.last, 'readInPlaceBytesMany');
+      });
+
+      test('readInPlaceBytesMany with no paths skips the platform', () async {
+        final callCount = fakePlatform.calls.length;
+        final result = await ICloudStorage.readInPlaceBytesMany(
+          containerId: containerId,
+          relativePaths: const [],
+        );
+        expect(result, isEmpty);
+        expect(fakePlatform.calls, hasLength(callCount));
+      });
+
+      for (final invalidPath in ['Documents/folder/', '  ', 'dir//file']) {
+        test('readInPlaceBytesMany rejects "$invalidPath"', () async {
+          final callCount = fakePlatform.calls.length;
+          await expectLater(
+            () => ICloudStorage.readInPlaceBytesMany(
+              containerId: containerId,
+              relativePaths: ['Documents/a.json', invalidPath],
+            ),
+            throwsA(isA<InvalidArgumentException>()),
+          );
+          expect(fakePlatform.calls, hasLength(callCount));
+        });
+      }
     });
 
     group('writeInPlace tests:', () {

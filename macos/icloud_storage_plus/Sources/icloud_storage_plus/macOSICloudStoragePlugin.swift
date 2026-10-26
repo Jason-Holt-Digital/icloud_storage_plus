@@ -115,6 +115,8 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
       readInPlace(call, result)
     case "readInPlaceBytes":
       readInPlaceBytes(call, result)
+    case "readInPlaceBytesMany":
+      readInPlaceBytesMany(call, result)
     case "writeInPlace":
       writeInPlace(call, result)
     case "writeInPlaceBytes":
@@ -932,24 +934,53 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
     ) { [self] containerURL in
       let fileURL = containerURL.appendingPathComponent(relativePath)
 
-      Task { @MainActor [self] in
-        self.readInPlaceDocument(at: fileURL) { [self] contents, error in
-          if let error = error {
-            let mapped = self.mapFileNotFoundError(
-              error,
-              operation: "readInPlace",
-              relativePath: relativePath
-            ) ?? self.nativeCodeError(
-              error,
-              operation: "readInPlace",
-              relativePath: relativePath
+      Task { [self] in
+        do {
+          let data = try await self.coordinatedReadData(at: fileURL)
+          guard let contents = String(data: data, encoding: .utf8) else {
+            throw NSError(
+              domain: NSCocoaErrorDomain,
+              code: NSFileReadUnknownError,
+              userInfo: [NSLocalizedDescriptionKey: "Unsupported text encoding"]
             )
-            result(mapped)
-            return
           }
-
-          result(contents)
+          DispatchQueue.main.async { result(contents) }
+        } catch {
+          let mapped = self.mapFileNotFoundError(
+            error,
+            operation: "readInPlace",
+            relativePath: relativePath
+          ) ?? self.nativeCodeError(
+            error,
+            operation: "readInPlace",
+            relativePath: relativePath
+          )
+          DispatchQueue.main.async { result(mapped) }
         }
+      }
+    }
+  }
+
+  /// Reads a whole file with one coordinated read on a background queue.
+  ///
+  /// A plain coordinated read is Apple's pattern for reading a file another
+  /// process may write. It waits for iCloud to download an item that is not
+  /// downloaded yet, and it costs far less than opening and closing a
+  /// document object for every read.
+  private func coordinatedReadData(at url: URL) async throws -> Data {
+    do {
+      return try await CoordinatedIO.coordinateReadingReturning(
+        at: url,
+        options: []
+      ) { coordinatedURL in
+        try Data(contentsOf: coordinatedURL)
+      }
+    } catch let bridgeError as CoordinateBridgeError {
+      switch bridgeError {
+      case .coordination(let error):
+        throw error
+      case .accessor(let error):
+        throw error
       }
     }
   }
@@ -1039,27 +1070,72 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
     ) { [self] containerURL in
       let fileURL = containerURL.appendingPathComponent(relativePath)
 
-      Task { @MainActor [self] in
-        self.readInPlaceBinaryDocument(at: fileURL) { [self] contents, error in
-          if let error = error {
-            let mapped = self.mapFileNotFoundError(
-              error,
-              operation: "readInPlaceBytes",
-              relativePath: relativePath
-            ) ?? self.nativeCodeError(
-              error,
-              operation: "readInPlaceBytes",
-              relativePath: relativePath
-            )
-            result(mapped)
-            return
+      Task { [self] in
+        do {
+          let data = try await self.coordinatedReadData(at: fileURL)
+          DispatchQueue.main.async {
+            result(FlutterStandardTypedData(bytes: data))
           }
+        } catch {
+          let mapped = self.mapFileNotFoundError(
+            error,
+            operation: "readInPlaceBytes",
+            relativePath: relativePath
+          ) ?? self.nativeCodeError(
+            error,
+            operation: "readInPlaceBytes",
+            relativePath: relativePath
+          )
+          DispatchQueue.main.async { result(mapped) }
+        }
+      }
+    }
+  }
 
-          if let contents {
-            result(FlutterStandardTypedData(bytes: contents))
-          } else {
-            result(nil)
+  /// Read many files as bytes with one coordinated batch read.
+  ///
+  /// Returns a map from each requested relative path to its bytes. A path
+  /// with no file is left out. Any other read failure fails the whole call.
+  private func readInPlaceBytesMany(_ call: FlutterMethodCall, _ result: @escaping FlutterResult) {
+    guard let args = call.arguments as? Dictionary<String, Any>,
+          let containerId = args["containerId"] as? String,
+          let relativePaths = args["relativePaths"] as? [String]
+    else {
+      result(argumentError(operation: "readInPlaceBytesMany"))
+      return
+    }
+
+    resolveContainerURL(
+      containerId: containerId,
+      operation: "readInPlaceBytesMany",
+      result: result
+    ) { [self] containerURL in
+      let fileURLs = relativePaths.map { containerURL.appendingPathComponent($0) }
+
+      Task { [self] in
+        do {
+          let contents = try await CoordinatedIO.readFilesIfPresent(at: fileURLs)
+          var payload: [String: FlutterStandardTypedData] = [:]
+          for (relativePath, data) in zip(relativePaths, contents) {
+            if let data {
+              payload[relativePath] = FlutterStandardTypedData(bytes: data)
+            }
           }
+          DispatchQueue.main.async { result(payload) }
+        } catch {
+          let failure = error as? CoordinatedBatchReadFailure
+          let underlying = failure?.error ?? error
+          let failedPath = failure.map { relativePaths[$0.index] }
+          let mapped = self.mapFileNotFoundError(
+            underlying,
+            operation: "readInPlaceBytesMany",
+            relativePath: failedPath
+          ) ?? self.nativeCodeError(
+            underlying,
+            operation: "readInPlaceBytesMany",
+            relativePath: failedPath
+          )
+          DispatchQueue.main.async { result(mapped) }
         }
       }
     }

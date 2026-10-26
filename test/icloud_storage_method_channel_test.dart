@@ -604,6 +604,102 @@ void main() {
     });
   });
 
+  group('readInPlaceBytesMany tests:', () {
+    void answerReadMany(Object? Function(MethodCall call) answer) {
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(channel, (methodCall) async {
+        mockMethodCall = methodCall;
+        return answer(methodCall);
+      });
+    }
+
+    test('sends every path and returns the bytes keyed by path', () async {
+      const paths = ['Documents/a.json', 'Documents/missing', 'Documents/b'];
+      answerReadMany(
+        (_) => {
+          'Documents/a.json': Uint8List.fromList([1, 2]),
+          'Documents/b': Uint8List.fromList([3]),
+        },
+      );
+
+      final result = await platform.readInPlaceBytesMany(
+        containerId: containerId,
+        relativePaths: paths,
+      );
+
+      expect(mockMethodCall.method, 'readInPlaceBytesMany');
+      final args = mockArguments();
+      expect(args['containerId'], containerId);
+      expect(args['relativePaths'], paths);
+      expect(result, {
+        'Documents/a.json': Uint8List.fromList([1, 2]),
+        'Documents/b': Uint8List.fromList([3]),
+      });
+    });
+
+    test('rejects null responses', () async {
+      answerReadMany((_) => null);
+
+      await expectLater(
+        () => platform.readInPlaceBytesMany(
+          containerId: containerId,
+          relativePaths: ['Documents/a.json'],
+        ),
+        throwsA(_pluginContractFor('readInPlaceBytesMany')),
+      );
+    });
+
+    test('rejects values that are not bytes', () async {
+      answerReadMany((_) => {'Documents/a.json': 'not bytes'});
+
+      await expectLater(
+        () => platform.readInPlaceBytesMany(
+          containerId: containerId,
+          relativePaths: ['Documents/a.json'],
+        ),
+        throwsA(_pluginContractFor('readInPlaceBytesMany')),
+      );
+    });
+
+    test('maps a native read failure to a typed exception', () async {
+      answerReadMany(
+        (_) => throw PlatformException(
+          code: _nativeCodeError,
+          message: 'Native Code Error',
+          details: {
+            'category': 'unknownNative',
+            'operation': 'readInPlaceBytesMany',
+            'retryable': false,
+            'relativePath': 'Documents/locked.json',
+            'nativeDomain': 'NSCocoaErrorDomain',
+            'nativeCode': 257,
+            'nativeDescription': 'Permission denied.',
+          },
+        ),
+      );
+
+      await expectLater(
+        () => platform.readInPlaceBytesMany(
+          containerId: containerId,
+          relativePaths: ['Documents/locked.json'],
+        ),
+        throwsA(
+          isA<ICloudUnknownNativeException>()
+              .having(
+                (error) => error.operation,
+                'operation',
+                'readInPlaceBytesMany',
+              )
+              .having(
+                (error) => error.relativePath,
+                'relativePath',
+                'Documents/locked.json',
+              ),
+        ),
+      );
+    });
+  });
+
   group('writeInPlace tests:', () {
     test('writeInPlace', () async {
       await platform.writeInPlace(

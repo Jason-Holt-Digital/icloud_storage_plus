@@ -161,8 +161,8 @@ abstract class ICloudStoragePlatform extends PlatformInterface {
   /// Trailing slashes are rejected here because reads are file-centric.
   ///
   /// Returns the local file contents as a String when Apple has local bytes
-  /// available for the document. Coordinated access uses UIDocument/NSDocument
-  /// and loads the full contents into memory. Text is decoded as UTF-8; use
+  /// available for the document. A coordinated read loads the full contents
+  /// into memory. Text is decoded as UTF-8; use
   /// [readInPlaceBytes] for binary formats.
   ///
   /// Throws on file-not-found and other failures.
@@ -183,8 +183,8 @@ abstract class ICloudStoragePlatform extends PlatformInterface {
   /// Trailing slashes are rejected here because reads are file-centric.
   ///
   /// Returns the local file contents as bytes when Apple has local bytes
-  /// available for the document. Coordinated access uses UIDocument/NSDocument
-  /// and loads the full contents into memory. Use for small files.
+  /// available for the document. A coordinated read loads the full contents
+  /// into memory. Use for small files.
   ///
   /// Throws on file-not-found and other failures.
   Future<Uint8List> readInPlaceBytes({
@@ -192,6 +192,23 @@ abstract class ICloudStoragePlatform extends PlatformInterface {
     required String relativePath,
   }) async {
     throw UnimplementedError('readInPlaceBytes() has not been implemented.');
+  }
+
+  /// Read many files in place as bytes with one coordinated read.
+  ///
+  /// [containerId] is the iCloud Container Id.
+  /// [relativePaths] are relative paths to files inside the container.
+  ///
+  /// Returns a map from each relative path, as passed, to the file's bytes.
+  /// A path with no file is left out of the map. Any other read failure fails
+  /// the whole call.
+  Future<Map<String, Uint8List>> readInPlaceBytesMany({
+    required String containerId,
+    required List<String> relativePaths,
+  }) async {
+    throw UnimplementedError(
+      'readInPlaceBytesMany() has not been implemented.',
+    );
   }
 
   /// Write a file in place inside the iCloud container using coordinated

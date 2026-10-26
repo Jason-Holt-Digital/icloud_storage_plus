@@ -10,10 +10,11 @@ This page traces native document I/O, staged content replacement, and in-process
 | Abstraction | Role |
 | --- | --- |
 | `ICloudDocument` | Path-to-path stream copies through platform document overrides |
-| `ICloudInPlaceDocument` / `ICloudInPlaceBinaryDocument` | Whole text/byte document content |
+| `ICloudInPlaceDocument` / `ICloudInPlaceBinaryDocument` | Whole text/byte document content for in-place writes |
 | `CoordinatedReplaceWriter` | Stage new content and replace an existing file under writing coordination |
 | `PerPathMutationLane` | Async mutex per standardized path, plus sorted two-endpoint acquisition |
 | `CoordinatedIO` / `CoordinateBridgeError` | Dispatch-backed synchronous coordination and separate coordination/accessor failures |
+| `CoordinatedIO.readFilesIfPresent` / `CoordinatedBatchReadFailure` | One coordinated batch read for many files; the failure names the index of the file that could not be read |
 | `VersionExposure` | Explicit version operations; not part of automatic write completion |
 
 ## Key source files
@@ -25,7 +26,7 @@ This page traces native document I/O, staged content replacement, and in-process
 | `ios/icloud_storage_plus/Sources/icloud_storage_plus/FileWriteHelpers.swift`, `macos/icloud_storage_plus/Sources/icloud_storage_plus/FileWriteHelpers.swift` | Stream-copy and atomic text/data staging |
 | `ios/icloud_storage_plus/Sources/icloud_storage_plus_foundation/CoordinatedReplaceWriter.swift`, `macos/icloud_storage_plus/Sources/icloud_storage_plus_foundation/CoordinatedReplaceWriter.swift` | Replacement algorithm and coordination dispatch |
 | `ios/icloud_storage_plus/Sources/icloud_storage_plus_foundation/PerPathMutationLane.swift`, `macos/icloud_storage_plus/Sources/icloud_storage_plus_foundation/PerPathMutationLane.swift` | Lane map, cancellation-aware async mutex, two-path ordering |
-| `ios/icloud_storage_plus/Sources/icloud_storage_plus_foundation/CoordinatedIO.swift`, `macos/icloud_storage_plus/Sources/icloud_storage_plus_foundation/CoordinatedIO.swift` | One- and two-URL coordination bridges |
+| `ios/icloud_storage_plus/Sources/icloud_storage_plus_foundation/CoordinatedIO.swift`, `macos/icloud_storage_plus/Sources/icloud_storage_plus_foundation/CoordinatedIO.swift` | One- and two-URL coordination bridges and the many-file batch read |
 | `ios/icloud_storage_plus/Sources/icloud_storage_plus/iOSICloudStoragePlugin.swift`, `macos/icloud_storage_plus/Sources/icloud_storage_plus/macOSICloudStoragePlugin.swift` | Lane call sites and delete/move/copy implementations |
 | `ios/icloud_storage_plus/Sources/icloud_storage_plus_foundation/VersionExposure.swift`, `macos/icloud_storage_plus/Sources/icloud_storage_plus_foundation/VersionExposure.swift` | Explicit `NSFileVersion` integration |
 
@@ -35,7 +36,11 @@ This page traces native document I/O, staged content replacement, and in-process
 
 The streaming document overrides copy from a source URL to a destination URL through `InputStream` and `OutputStream`. Both document implementations and the staging helper use a **64 KiB buffer**. Partial positive writes are retried until that buffer slice is written; a zero or negative write throws instead of spinning. Parent directories are created when absent. This bounds the copy buffer, not all memory used by the surrounding application (`ios/icloud_storage_plus/Sources/icloud_storage_plus/ICloudDocument.swift`, `macos/icloud_storage_plus/Sources/icloud_storage_plus/ICloudDocument.swift`, both file-writing helper files above).
 
-In-place text and binary document subclasses hold a `String` or `Data`. Text writes use UTF-8; invalid UTF-8 reads throw. These are whole-content operations, unlike the path-copy loop. iOS opens a `UIDocument`, extracts content, and closes it before completing an in-place read. macOS dispatches the synchronous `NSDocument.read(from:ofType:)` call to a global queue and closes on the main queue (both document files).
+In-place text and binary document subclasses hold a `String` or `Data` for in-place writes. Text writes use UTF-8. These are whole-content operations, unlike the path-copy loop.
+
+In-place reads do not open a document. `readInPlace` and `readInPlaceBytes` call the plugin's private `coordinatedReadData(at:)`, which runs `CoordinatedIO.coordinateReadingReturning` with `Data(contentsOf:)` on a global worker and returns the Flutter result on the main queue. `readInPlace` decodes the bytes as UTF-8, and invalid UTF-8 throws. Results and error mapping are the same as the earlier document-based reads; the per-read cost is much lower because no document object is opened and closed (both plugin files).
+
+`readInPlaceBytesMany` resolves the container once, then calls `CoordinatedIO.readFilesIfPresent`. That helper builds one `NSFileAccessIntent.readingIntent(with:options:)` per file and calls `NSFileCoordinator.coordinate(with:queue:byAccessor:)` once, with a private `OperationQueue`. Inside the accessor it reads each `intent.url` with `Data(contentsOf:)`. A Cocoa `NSFileReadNoSuchFileError` or `NSFileNoSuchFileError` becomes a missing entry; any other error stops the batch as a `CoordinatedBatchReadFailure`, which the plugin maps with the same `mapFileNotFoundError` / `nativeCodeError` path as `readInPlaceBytes`, tagged with the failing relative path. A coordination error fails the call without a path.
 
 For copy-out, iOS opens the path-copy document and reports success before its asynchronous close finishes. macOS directly invokes the document's URL-read override on a global worker. New-file writes fall back to `UIDocument.save(..., .forCreating)` on iOS and direct `NSDocument.write(..., .saveAsOperation, ...)` on macOS. The macOS wrappers do not add an explicit `CoordinatedIO` call around these direct document methods. Read the actual entry path rather than assuming all document-named methods share one coordination wrapper (both document files).
 

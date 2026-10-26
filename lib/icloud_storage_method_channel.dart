@@ -300,6 +300,34 @@ class MethodChannelICloudStorage extends ICloudStoragePlatform {
   }
 
   @override
+  Future<Map<String, Uint8List>> readInPlaceBytesMany({
+    required String containerId,
+    required List<String> relativePaths,
+  }) async {
+    const method = 'readInPlaceBytesMany';
+    final result = await _invokeRequiredMethod<Map<Object?, Object?>>(
+      method,
+      {
+        'containerId': containerId,
+        'relativePaths': relativePaths,
+      },
+    );
+    final contents = <String, Uint8List>{};
+    for (final MapEntry(:key, :value) in result.entries) {
+      if (key is! String || value is! Uint8List) {
+        throw _channelContractError(
+          operation: method,
+          message: 'Expected String keys and Uint8List values, got '
+              '${key.runtimeType}: ${value.runtimeType}',
+          underlying: result,
+        );
+      }
+      contents[key] = value;
+    }
+    return contents;
+  }
+
+  @override
   Future<void> writeInPlace({
     required String containerId,
     required String relativePath,
