@@ -1849,13 +1849,13 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
 
       Task.detached { [self] in
         do {
-          guard FileManager.default.fileExists(atPath: itemURL.path) else {
-            throw self.itemNotFoundError(
-              operation: "moveOutOfContainer",
-              relativePath: relativePath
-            )
-          }
           try await PerPathMutationLane.shared.withLane(for: itemURL) {
+            guard FileManager.default.fileExists(atPath: itemURL.path) else {
+              throw self.itemNotFoundError(
+                operation: "moveOutOfContainer",
+                relativePath: relativePath
+              )
+            }
             try await UbiquitousItemMover.live.moveOutOfContainer(
               itemURL: itemURL,
               localURL: localURL
