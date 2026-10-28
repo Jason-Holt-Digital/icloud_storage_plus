@@ -34,13 +34,16 @@ export 'models/transfer_progress.dart';
 /// ## In-place content API (small files)
 /// For small text/binary files you can read/write in place using
 /// [readInPlace]/[readInPlaceBytes] and [writeInPlace]/[writeInPlaceBytes].
-/// These methods transfer the full contents over the platform channel and load
-/// the whole file in memory.
+/// Use [readInPlaceBytesMany] to read many small files with one coordinated
+/// read. These methods transfer the full contents over the platform channel
+/// and load the whole file in memory.
 ///
 /// ## Document IO Tier Rationale
-/// The plugin uses the URL-tier document APIs (`UIDocument`/`NSDocument`) so
-/// reads and writes are coordinated with iCloud and can stream efficiently
-/// for large files.
+/// Transfers and in-place writes use the URL-tier document APIs
+/// (`UIDocument`/`NSDocument`) so they are coordinated with iCloud and can
+/// stream efficiently for large files. In-place reads use a plain
+/// `NSFileCoordinator` read, which is also coordinated with iCloud and costs
+/// far less per file.
 ///
 /// ## Files app visibility
 /// Use the literal `Documents/` path prefix for files that should be visible
@@ -228,8 +231,7 @@ class ICloudStorage {
   ///
   /// [relativePath] is the path within the iCloud container.
   ///
-  /// Trailing slashes are rejected here because reads are file-centric and
-  /// coordinated through UIDocument/NSDocument.
+  /// Trailing slashes are rejected here because reads are file-centric.
   ///
   /// Coordinated access loads the full contents into memory. Text is decoded
   /// as UTF-8; use [readInPlaceBytes] for binary formats.
@@ -266,8 +268,7 @@ class ICloudStorage {
   ///
   /// [relativePath] is the path within the iCloud container.
   ///
-  /// Trailing slashes are rejected here because reads are file-centric and
-  /// coordinated through UIDocument/NSDocument.
+  /// Trailing slashes are rejected here because reads are file-centric.
   ///
   /// Coordinated access loads the full contents into memory. Use for small
   /// files.
@@ -295,6 +296,37 @@ class ICloudStorage {
     return ICloudStoragePlatform.instance.readInPlaceBytes(
       containerId: containerId,
       relativePath: relativePath,
+    );
+  }
+
+  /// Read many files in place as bytes with one coordinated read.
+  ///
+  /// [relativePaths] are paths within the iCloud container. Each path is
+  /// validated the same way as for [readInPlaceBytes].
+  ///
+  /// Returns a map from each relative path, exactly as passed, to the file's
+  /// bytes. A path with no file is left out of the map. Any other read failure
+  /// fails the whole call with the same errors [readInPlaceBytes] throws.
+  ///
+  /// All files are loaded into memory at once. Use for many small files, such
+  /// as when copying a folder of small documents.
+  static Future<Map<String, Uint8List>> readInPlaceBytesMany({
+    required String containerId,
+    required List<String> relativePaths,
+  }) async {
+    for (final relativePath in relativePaths) {
+      if (relativePath.endsWith('/') ||
+          relativePath.trim().isEmpty ||
+          !_validateRelativePath(relativePath)) {
+        throw InvalidArgumentException('invalid relativePath: $relativePath');
+      }
+    }
+
+    if (relativePaths.isEmpty) return {};
+
+    return ICloudStoragePlatform.instance.readInPlaceBytesMany(
+      containerId: containerId,
+      relativePaths: relativePaths,
     );
   }
 
@@ -474,6 +506,88 @@ class ICloudStorage {
       containerId: containerId,
       fromRelativePath: fromRelativePath,
       toRelativePath: toRelativePath,
+    );
+  }
+
+  /// Create a directory, and any missing parent directories, in the iCloud
+  /// container with a coordinated write.
+  ///
+  /// Succeeds when the directory already exists.
+  static Future<void> createDirectory({
+    required String containerId,
+    required String relativePath,
+  }) async {
+    if (!_validateRelativePath(relativePath)) {
+      throw InvalidArgumentException('invalid relativePath: $relativePath');
+    }
+
+    await ICloudStoragePlatform.instance.createDirectory(
+      containerId: containerId,
+      relativePath: relativePath,
+    );
+  }
+
+  /// Move a local file or directory into the iCloud container with
+  /// `FileManager.setUbiquitous(true, itemAt:destinationURL:)`.
+  ///
+  /// [localPath] is the absolute path of the item outside the container. It is
+  /// removed from that location when the move succeeds. A directory moves with
+  /// all its contents in one call.
+  ///
+  /// [relativePath] is where the item goes in the container. Missing parent
+  /// directories are created with a coordinated write. The item at
+  /// [relativePath] must not exist; Foundation refuses to replace it.
+  ///
+  /// The move works offline. iCloud uploads the item later.
+  static Future<void> moveIntoContainer({
+    required String containerId,
+    required String localPath,
+    required String relativePath,
+  }) async {
+    if (!localPath.startsWith('/')) {
+      throw InvalidArgumentException('invalid localPath: $localPath');
+    }
+
+    if (!_validateRelativePath(relativePath)) {
+      throw InvalidArgumentException('invalid relativePath: $relativePath');
+    }
+
+    await ICloudStoragePlatform.instance.moveIntoContainer(
+      containerId: containerId,
+      localPath: localPath,
+      relativePath: relativePath,
+    );
+  }
+
+  /// Move a file or directory out of the iCloud container to a local path with
+  /// `FileManager.setUbiquitous(false, itemAt:destinationURL:)`.
+  ///
+  /// This removes the item from iCloud on every device. Use it to undo a
+  /// [moveIntoContainer] that other devices have not relied on yet. To keep
+  /// the iCloud item, copy it out with [downloadFile] instead.
+  ///
+  /// [localPath] is an absolute path. The item there must not exist, and its
+  /// parent directory must.
+  ///
+  /// Throws [ICloudItemNotFoundException] when the container has no item at
+  /// [relativePath].
+  static Future<void> moveOutOfContainer({
+    required String containerId,
+    required String relativePath,
+    required String localPath,
+  }) async {
+    if (!localPath.startsWith('/')) {
+      throw InvalidArgumentException('invalid localPath: $localPath');
+    }
+
+    if (!_validateRelativePath(relativePath)) {
+      throw InvalidArgumentException('invalid relativePath: $relativePath');
+    }
+
+    await ICloudStoragePlatform.instance.moveOutOfContainer(
+      containerId: containerId,
+      relativePath: relativePath,
+      localPath: localPath,
     );
   }
 

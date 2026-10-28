@@ -300,6 +300,34 @@ class MethodChannelICloudStorage extends ICloudStoragePlatform {
   }
 
   @override
+  Future<Map<String, Uint8List>> readInPlaceBytesMany({
+    required String containerId,
+    required List<String> relativePaths,
+  }) async {
+    const method = 'readInPlaceBytesMany';
+    final result = await _invokeRequiredMethod<Map<Object?, Object?>>(
+      method,
+      {
+        'containerId': containerId,
+        'relativePaths': relativePaths,
+      },
+    );
+    final contents = <String, Uint8List>{};
+    for (final MapEntry(:key, :value) in result.entries) {
+      if (key is! String || value is! Uint8List) {
+        throw _channelContractError(
+          operation: method,
+          message: 'Expected String keys and Uint8List values, got '
+              '${key.runtimeType}: ${value.runtimeType}',
+          underlying: result,
+        );
+      }
+      contents[key] = value;
+    }
+    return contents;
+  }
+
+  @override
   Future<void> writeInPlace({
     required String containerId,
     required String relativePath,
@@ -359,6 +387,43 @@ class MethodChannelICloudStorage extends ICloudStoragePlatform {
       'containerId': containerId,
       'fromRelativePath': fromRelativePath,
       'toRelativePath': toRelativePath,
+    });
+  }
+
+  @override
+  Future<void> createDirectory({
+    required String containerId,
+    required String relativePath,
+  }) async {
+    await _invokeVoidMethod('createDirectory', {
+      'containerId': containerId,
+      'relativePath': relativePath,
+    });
+  }
+
+  @override
+  Future<void> moveIntoContainer({
+    required String containerId,
+    required String localPath,
+    required String relativePath,
+  }) async {
+    await _invokeVoidMethod('moveIntoContainer', {
+      'containerId': containerId,
+      'localPath': localPath,
+      'relativePath': relativePath,
+    });
+  }
+
+  @override
+  Future<void> moveOutOfContainer({
+    required String containerId,
+    required String relativePath,
+    required String localPath,
+  }) async {
+    await _invokeVoidMethod('moveOutOfContainer', {
+      'containerId': containerId,
+      'relativePath': relativePath,
+      'localPath': localPath,
     });
   }
 

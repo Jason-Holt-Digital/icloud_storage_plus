@@ -38,6 +38,7 @@ let package = Package(
                 "icloud_storage_plus_foundation/VersionExposure.swift",
                 "icloud_storage_plus_foundation/PerPathMutationLane.swift",
                 "icloud_storage_plus_foundation/UbiquitousItemMaterializer.swift",
+                "icloud_storage_plus_foundation/UbiquitousItemMover.swift",
             ],
             resources: [
                 .process("icloud_storage_plus/PrivacyInfo.xcprivacy"),

@@ -425,54 +425,6 @@ extension ICloudStoragePlugin {
         }
     }
 
-    /// Read a document in place using UIDocument coordination.
-    func readInPlaceDocument(
-        at url: URL,
-        completion: @escaping (String?, Error?) -> Void
-    ) {
-        let document = ICloudInPlaceDocument(fileURL: url)
-
-        document.open { success in
-            if success {
-                let contents = document.textContents
-                document.close { _ in
-                    completion(contents, nil)
-                }
-            } else {
-                let error = document.lastError ?? NSError(
-                    domain: NSCocoaErrorDomain,
-                    code: NSFileReadUnknownError,
-                    userInfo: [NSLocalizedDescriptionKey: "Failed to open document"]
-                )
-                completion(nil, error)
-            }
-        }
-    }
-
-    /// Read a binary document in place using UIDocument coordination.
-    func readInPlaceBinaryDocument(
-        at url: URL,
-        completion: @escaping (Data?, Error?) -> Void
-    ) {
-        let document = ICloudInPlaceBinaryDocument(fileURL: url)
-
-        document.open { success in
-            if success {
-                let contents = document.dataContents
-                document.close { _ in
-                    completion(contents, nil)
-                }
-            } else {
-                let error = document.lastError ?? NSError(
-                    domain: NSCocoaErrorDomain,
-                    code: NSFileReadUnknownError,
-                    userInfo: [NSLocalizedDescriptionKey: "Failed to open document"]
-                )
-                completion(nil, error)
-            }
-        }
-    }
-
     /// Write a document in place using UIDocument coordination.
     func writeInPlaceDocument(
         at url: URL,

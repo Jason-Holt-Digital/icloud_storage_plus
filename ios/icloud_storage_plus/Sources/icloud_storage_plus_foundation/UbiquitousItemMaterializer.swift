@@ -26,6 +26,9 @@ struct UbiquitousItemMaterializer {
         case notDownloaded
         /// Download is in progress.
         case downloading
+        /// No iCloud item is at the URL yet, as before a write creates
+        /// the file, so there is nothing to download.
+        case notInICloud
     }
 
     typealias DownloadStatusProvider = (URL) -> Status
@@ -43,8 +46,8 @@ struct UbiquitousItemMaterializer {
     /// caller never waits for the download to complete.
     func requestMaterializationIfNeeded(at url: URL) throws -> Status {
         let status = downloadStatus(url)
-        if status == .current {
-            return .current
+        if status == .current || status == .notInICloud {
+            return status
         }
         // Request download (best-effort request, not a deadline). The
         // download proceeds asynchronously; the caller does not wait.
@@ -56,17 +59,32 @@ struct UbiquitousItemMaterializer {
 extension UbiquitousItemMaterializer {
     static let live = UbiquitousItemMaterializer(
         downloadStatus: { url in
-            let values = try? url.resourceValues(forKeys: [
-                .ubiquitousItemDownloadingStatusKey,
-                .ubiquitousItemIsDownloadingKey,
-                .isUbiquitousItemKey,
-            ])
+            // A missing path reads as values that are all nil, not as an
+            // error.
+            guard
+                let values = try? url.resourceValues(forKeys: [
+                    .ubiquitousItemDownloadingStatusKey,
+                    .ubiquitousItemIsDownloadingKey,
+                    .isUbiquitousItemKey,
+                ]),
+                values.isUbiquitousItem == true
+            else {
+                // Before iOS 17 and macOS 14, an item iCloud has not
+                // downloaded is a hidden `.name.icloud` placeholder, so the
+                // item's own path is missing. Only a path with neither is
+                // not in iCloud yet.
+                let placeholder = url.deletingLastPathComponent()
+                    .appendingPathComponent(".\(url.lastPathComponent).icloud")
+                return FileManager.default.fileExists(atPath: placeholder.path)
+                    ? .notDownloaded
+                    : .notInICloud
+            }
 
-            if values?.ubiquitousItemIsDownloading == true {
+            if values.ubiquitousItemIsDownloading == true {
                 return .downloading
             }
 
-            switch values?.ubiquitousItemDownloadingStatus {
+            switch values.ubiquitousItemDownloadingStatus {
             case .current:
                 return .current
             case .downloaded:

@@ -19,6 +19,18 @@ This package operates inside your app's local iCloud ubiquity container. Apple
 owns iCloud Drive sync, materialization, freshness, and document conflict
 behavior; this plugin performs local file operations against the container path.
 
+## What this plugin does, in plain words
+
+Your app gets its own folder in iCloud Drive, called the container. This plugin
+reads, writes, moves, copies, lists, and deletes files in that folder. Apple
+does the syncing: it uploads your changes, downloads changes from other
+devices, and decides when. The plugin never waits for a sync to finish and
+never reports "not synced yet" as an error.
+
+The core of the plugin is storing and syncing documents through iCloud Drive.
+It may grow to cover other iCloud features, such as the key-value store
+(`NSUbiquitousKeyValueStore`); there are no such methods yet.
+
 ## Platform support
 
 | Platform | Minimum version |
@@ -71,7 +83,7 @@ file exists under `Documents/`.
 
 ## Choosing the right API
 
-There are four “tiers” of API in this plugin:
+There are five “tiers” of API in this plugin:
 
 1. **Path-only transfers** for large files (no bytes returned to Dart)
    - `uploadFile` (local → iCloud)
@@ -79,7 +91,13 @@ There are four “tiers” of API in this plugin:
 2. **In-place content** for small files (bytes/strings cross the platform
    channel; loads full contents in memory)
     - `readInPlace`, `readInPlaceBytes`
+    - `readInPlaceBytesMany` reads a list of files with one coordinated read
+      and returns a map from each path to its bytes. Files that do not exist
+      are left out of the map. See
+      [Reading many small files](#reading-many-small-files).
     - `writeInPlace`, `writeInPlaceBytes`
+    - Reads use a plain coordinated read (`NSFileCoordinator`), not a
+      `UIDocument`/`NSDocument`, so each read is cheap.
     - On iOS and macOS, existing-file writes stage the complete new content and
       install it with `FileManager.replaceItemAt` under coordinated ordinary-write
       access. This preserves the destination relative path, but is not a
@@ -98,7 +116,18 @@ There are four “tiers” of API in this plugin:
    - `copy()` can copy files or directories to new destinations. If you need to
      replace an existing directory tree, manage that directory explicitly rather
      than relying on overwrite replacement.
-4. **Container listing** (two complementary approaches)
+4. **Moving local items into iCloud**
+   - `moveIntoContainer` moves a local file or a whole directory into the
+     container with `FileManager.setUbiquitous(true, itemAt:destinationURL:)`.
+     It is a move, not a copy: the local item is gone afterwards. It works
+     offline, and iCloud uploads later. Missing parent directories are created
+     with a coordinated write. The destination must not exist.
+   - `moveOutOfContainer` uses `setUbiquitous(false, ...)` to move an item back
+     to a local path. This removes it from iCloud on every device, so use it to
+     undo a `moveIntoContainer`, not to turn iCloud off for data other devices
+     use. To keep the iCloud copy, use `downloadFile`.
+   - `createDirectory` makes a container directory, with a coordinated write.
+5. **Container listing** (two complementary approaches)
    - `gather` — `NSMetadataQuery`-based; can discover remote files and document
      promises and deliver updated metadata snapshots while subscribed. Update
      timing and coalescing are controlled by Apple; results remain eventually
@@ -107,11 +136,15 @@ There are four “tiers” of API in this plugin:
      mutations; returns download/upload status via URL resource values; only sees
      files with a local representation (including iCloud placeholders)
 
-On iOS, when Flutter provides a background platform-channel task queue, native
-filesystem work for the in-place APIs runs there so iCloud container lookup and
-`UIDocument` preflight do not block the app's main thread. If that queue is not
-available, Flutter falls back to its default platform-channel dispatch model.
-macOS keeps the existing dispatch model.
+On iOS and macOS, the plugin's file-system work runs off the app's main thread:
+container lookup, reads, writes and uploads (including their checks before
+writing), moves, existence and metadata checks, conflict version calls, and the
+request that starts a download. A file-system call in the iCloud container can
+wait for seconds while iCloud is busy, so running it on the main thread would
+freeze the app. On iOS, the `UIDocument` objects that copy files in and out and
+document change observation stay on the main thread, as UIKit requires. On
+macOS, `NSDocument` writes run in the background and document change
+observation starts on a background queue.
 
 ## Migration notes for 4.0.0
 
@@ -200,6 +233,49 @@ Future<void> example() async {
   }
 }
 ```
+
+## Turning iCloud on or off in your app
+
+A common app setting is "Use iCloud". Here is the pattern Apple recommends,
+and the methods that do each step.
+
+**Turning iCloud on: move the files in.** Call `moveIntoContainer` for each
+local file or folder. It is a move, not a copy, so the local file is gone
+afterwards and there is only one copy to keep track of. It works offline: the
+move happens right away, and iCloud uploads the files when the device is back
+online.
+
+```dart
+await ICloudStorage.moveIntoContainer(
+  containerId: containerId,
+  localPath: '/path/to/app/documents/journals', // absolute path
+  relativePath: 'Documents/journals',
+);
+```
+
+Things to know:
+
+- The destination must not exist yet. If iCloud already has an item with that
+  name (for example from another device), decide in your app what to do: keep
+  both, combine them, or replace one. Then move the rest.
+- Missing parent folders in the container are created for you.
+- Use `documentExists` to check whether the container already has an item.
+  It returns `true` for folders too.
+- Use `listContents` to see what one container folder holds right now.
+
+**Turning iCloud off: copy the files out.** Use `downloadFile` to copy each
+file to local storage. (`readInPlace` returns a file's contents instead; save
+them to a local file yourself.) This leaves the iCloud copy
+in place, so other devices that still use iCloud keep their data.
+
+Only use `moveOutOfContainer` to undo a `moveIntoContainer` that other devices
+have not relied on yet. It removes the item from iCloud on **every** device.
+
+**Telling the user what is happening.** `listContents` and `getItemMetadata`
+report upload and download status from Apple. For example, a file that is on
+this device but not uploaded yet (`isUploaded == false`) can be shown as
+"Waiting to upload". Read the status when you show it; do not poll or wait for
+it to change.
 
 ## Watching document changes
 
@@ -296,6 +372,38 @@ await ICloudStorage.uploadFile(
 );
 ```
 
+## Reading many small files
+
+`readInPlaceBytesMany` reads many files in one call. It coordinates all of them
+together, which is much faster than calling `readInPlaceBytes` once per file
+when you copy a folder of small documents.
+
+```dart
+final contents = await ICloudStorage.readInPlaceBytesMany(
+  containerId: containerId,
+  relativePaths: [
+    'Documents/journal/index.json',
+    'Documents/journal/entry-1.json',
+    'Documents/journal/entry-2.json',
+  ],
+);
+
+// Keys are the paths exactly as you passed them.
+// A path with no file is not in the map, so this is null when it is missing.
+final Uint8List? index = contents['Documents/journal/index.json'];
+```
+
+- The result has an entry only for files that exist. A missing file is not an
+  error.
+- Any other failure (for example a path that is a folder, no permission, or a
+  failed coordinated read) fails the whole call with the same
+  `ICloudOperationException` types `readInPlaceBytes` throws. When the failure
+  belongs to one file, the exception's `relativePath` names it.
+- Each path is checked like `readInPlaceBytes` checks its path. An invalid path
+  throws `InvalidArgumentException` before anything is read.
+- An empty list returns an empty map.
+- Every file is loaded into memory at once, so use it for small files.
+
 ## Container-relative paths
 
 This plugin consistently uses `relativePath` for paths inside the iCloud
@@ -311,7 +419,8 @@ directory-oriented methods accept them:
 File-centric operations reject trailing slashes (they require a file path):
 
 - `uploadFile`, `downloadFile`
-- `readInPlace`, `readInPlaceBytes`, `writeInPlace`, `writeInPlaceBytes`
+- `readInPlace`, `readInPlaceBytes`, `readInPlaceBytesMany`, `writeInPlace`,
+  `writeInPlaceBytes`
 
 On iOS and macOS, file-centric overwrite operations reject an existing directory
 destination instead of replacing it. Existing-destination `copy()` replacement
@@ -509,8 +618,8 @@ occur before native allocation.
 
 Native method-channel failures, event-channel failures, and malformed channel
 payloads map to typed exceptions. This applies to request/response APIs such as
-`icloudAvailable`, `readInPlace`, `writeInPlace`, `copy`, `getContainerPath`,
-and `getItemMetadata`, plus `gather`, document-change, and transfer streams:
+`icloudAvailable`, `readInPlace`, `readInPlaceBytesMany`, `writeInPlace`, `copy`,
+`getContainerPath`, and `getItemMetadata`, plus `gather`, document-change, and transfer streams:
 
 - `ICloudContainerAccessException`
 - `ICloudItemNotFoundException`
@@ -553,6 +662,11 @@ timeout/readiness failures from them.
 - After a rename/move/delete, `gather()` may still return stale results for a
   few seconds while the Spotlight index catches up. Use `listContents()` for
   immediate consistency.
+- `moveIntoContainer` fails if the destination already exists. Check with
+  `documentExists` first and decide what your app should do with both copies.
+- An item that is not in iCloud yet (for example a file a write is about to
+  create) is not an error. The plugin only asks iCloud to download items that
+  iCloud has.
 
 ## Documentation
 

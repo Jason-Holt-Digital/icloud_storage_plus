@@ -5,7 +5,48 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [4.1.1](https://github.com/Jason-Holt-Digital/icloud_storage_plus/compare/4.1.0...4.1.1) - 2026-10-26
+
+### Fixed
+
+- `documentExists`, `getItemMetadata`, `downloadFile` (starting the download),
+  `enumerateUnresolvedConflictVersions`, `copyConflictVersion`, and
+  `markConflictResolved` no longer touch the file system on the main thread.
+  On a busy iCloud daemon these calls could block for seconds and freeze the
+  app ([#48](https://github.com/Jason-Holt-Digital/icloud_storage_plus/issues/48)).
+  Results and errors are unchanged.
+- On macOS, `uploadFile`, `writeInPlace`, and `writeInPlaceBytes` now run their
+  checks before writing off the main thread, as they already did on iOS.
+
+## [4.1.0](https://github.com/Jason-Holt-Digital/icloud_storage_plus/compare/4.0.0...4.1.0) - 2026-10-26
+
+### Added
+
+- `moveIntoContainer` moves a local file or directory into the container with
+  `FileManager.setUbiquitous(true, itemAt:destinationURL:)` on a background
+  queue, creating missing parent directories with a coordinated write.
+- `moveOutOfContainer` moves a container item back to a local path with
+  `setUbiquitous(false, ...)`.
+- `createDirectory` creates a container directory with a coordinated write.
+- `readInPlaceBytesMany` reads a list of files with one coordinated read and
+  returns a map from each path to its bytes. A file that does not exist is left
+  out of the map. Any other failure fails the whole call with the same errors
+  as `readInPlaceBytes`. Use it to read many small files much faster than one
+  `readInPlaceBytes` call per file.
+
+### Changed
+
+- `readInPlace` and `readInPlaceBytes` now do a plain coordinated read
+  (`NSFileCoordinator`) instead of opening and closing a `UIDocument` or
+  `NSDocument` for every read. Results and errors are unchanged. Reads are much
+  faster: copying 242 small files on an iPad went from about 8.8 s to about 2 s.
+
+### Fixed
+
+- A write that creates a new file no longer asks iCloud to download that file
+  first, which logged a "doesn't exist" materialization failure.
+  An item that is only an iCloud placeholder (`.name.icloud`, before iOS 17
+  and macOS 14) still gets its download request.
 
 ## [4.0.0] - 2026-07-19
 

@@ -12,14 +12,18 @@ Choose among four capabilities: [file access](file-access.md), [listing and meta
 | Check availability or locate the container | `icloudAvailable`, `getContainerPath` | Check availability before operations; configure the app's entitlements first |
 | Copy a large file into or out of the container | `uploadFile`, `downloadFile` | Paths cross Flutter channels, not file bytes; copies do not create a continuing sync relationship |
 | Read or write small text/binary content | `readInPlace`, `readInPlaceBytes`, `writeInPlace`, `writeInPlaceBytes` | Entire contents are held in memory and cross the channel |
+| Read many small files at once | `readInPlaceBytesMany` | One coordinated read for the whole list; missing files are left out of the result; any other failure fails the call |
 | Manage local entries | `delete`, `move`, `rename`, `copy` | Files and directories are supported; existing-directory copy replacement is not |
+| Turn iCloud on for local files | `moveIntoContainer` | A move, not a copy; works offline; the destination must not exist |
+| Make a container folder | `createDirectory` | Creates missing parents too; succeeds when the folder already exists |
+| Undo a move into iCloud | `moveOutOfContainer` | Removes the item from iCloud on every device; use `downloadFile` to keep it |
 | Discover container metadata and refresh hints | `gather`, optional `onUpdate` | Metadata-index snapshots, including document promises; eventually consistent |
 | List one directory after a local mutation | `listContents` | Direct children with local filesystem representations, including placeholders |
 | Query a known path without downloading content | `documentExists`, `getItemMetadata` | Filesystem existence or typed URL-resource metadata, not remote discovery |
 | Observe an existing file | `watchDocumentChanges` | Invalidation/state hints; synchronous listener and explicit cancellation |
 | Inspect and preserve conflict versions | `enumerateUnresolvedConflictVersions`, `copyConflictVersion`, `markConflictResolved` | App chooses policy and backup destination; removal is explicit and off by default |
 
-The facade defines these entry points in `lib/icloud_storage.dart`; `README.md` explains the large-file/small-file distinction and `Documents/` convention for Files app visibility. The four capability guides above group related workflows rather than reproducing the README's four API tiers.
+The facade defines these entry points in `lib/icloud_storage.dart`; `README.md` explains the large-file/small-file distinction and `Documents/` convention for Files app visibility. The four capability guides above group related workflows rather than reproducing the README's five API tiers.
 
 ## Integration and modification entry points
 

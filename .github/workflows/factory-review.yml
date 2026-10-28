@@ -125,10 +125,32 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
+      # droid-action's `settings` input writes ~/.factory/droid/settings.json,
+      # but Droid reads custom models from ~/.factory/settings.json.
+      - name: Register the Anthropic API custom model
+        run: |
+          mkdir -p ~/.factory
+          cat > ~/.factory/settings.json <<'JSON'
+          {"customModels": [{
+            "id": "custom:anthropic-api:sonnet-5-5",
+            "displayName": "Anthropic API: Sonnet 5.5",
+            "model": "claude-sonnet-5-5",
+            "baseModelId": "claude-sonnet-5-5",
+            "baseUrl": "https://api.anthropic.com",
+            "apiKey": "${ANTHROPIC_API_KEY}",
+            "provider": "anthropic",
+            "maxOutputTokens": 64000
+          }]}
+          JSON
+
       - name: Run native deep review and security
         uses: Factory-AI/droid-action@ec767fcf5fac43b64e746cd42bb398b3b0b529ed # v10
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         with:
           factory_api_key: ${{ secrets.FACTORY_API_KEY }}
+          review_model: custom:anthropic-api:sonnet-5-5
+          security_model: custom:anthropic-api:sonnet-5-5
           automatic_review: "true"
           automatic_security_review: "true"
           review_depth: deep

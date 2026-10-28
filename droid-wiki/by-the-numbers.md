@@ -60,7 +60,7 @@ The test total is not a coverage percentage. Dart unit tests and Foundation harn
 
 | Surface | Count | Evidence |
 | --- | ---: | --- |
-| Publishable Dart plugin | 1 | `pubspec.yaml`: `icloud_storage_plus`, version `4.0.0` |
+| Publishable Dart plugin | 1 | `pubspec.yaml`: `icloud_storage_plus`, version `4.1.1` |
 | Nonpublishable example Dart package | 1 | `example/pubspec.yaml`: `icloud_storage_example`, `publish_to: 'none'`, local `path: ../` dependency |
 | Apple platform implementations | 2 | `pubspec.yaml`: iOS and macOS plugin registrations |
 | SwiftPM manifests | 4 | `ios/icloud_storage_plus/Package.swift`, `macos/icloud_storage_plus/Package.swift`, `ios/icloud_storage_plus/Sources/icloud_storage_plus_foundation/Package.swift`, `macos/icloud_storage_plus/Sources/icloud_storage_plus_foundation/Package.swift` |
@@ -115,9 +115,9 @@ Definition: count named, non-underscore, top-level type declarations **declared 
 | `lib/models/transfer_progress.dart` | 2 |
 | **Total** | **21** |
 
-Separately, `ICloudStorage` declares **20 public static asynchronous methods**:
+Separately, `ICloudStorage` declares **24 public static asynchronous methods**:
 
-`icloudAvailable`, `gather`, `watchDocumentChanges`, `getContainerPath`, `uploadFile`, `downloadFile`, `readInPlace`, `readInPlaceBytes`, `writeInPlace`, `writeInPlaceBytes`, `delete`, `move`, `rename`, `copy`, `documentExists`, `getItemMetadata`, `listContents`, `enumerateUnresolvedConflictVersions`, `copyConflictVersion`, and `markConflictResolved`.
+`icloudAvailable`, `gather`, `watchDocumentChanges`, `getContainerPath`, `uploadFile`, `downloadFile`, `readInPlace`, `readInPlaceBytes`, `readInPlaceBytesMany`, `writeInPlace`, `writeInPlaceBytes`, `delete`, `move`, `rename`, `copy`, `createDirectory`, `moveIntoContainer`, `moveOutOfContainer`, `documentExists`, `getItemMetadata`, `listContents`, `enumerateUnresolvedConflictVersions`, `copyConflictVersion`, and `markConflictResolved`.
 
 These are not added to the type count. For example, `StreamHandler` is declared in `lib/icloud_storage_platform_interface.dart`, which the facade imports but does not export; this entry-library metric does not count that typedef.
 

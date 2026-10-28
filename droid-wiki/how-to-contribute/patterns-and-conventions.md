@@ -16,7 +16,7 @@ File-centric operations reject trailing slashes. Directory-oriented operations a
 
 ## Native operation patterns
 
-Update both `ios/` and `macos/` for native features. Container lookup is off the main thread and single-shot. Use the existing closure-injected seams for deterministic helper tests (`ios/icloud_storage_plus/Sources/icloud_storage_plus_foundation/UbiquityContainerResolver.swift`, `ios/icloud_storage_plus/Sources/icloud_storage_plus_foundation/WriteEntrypointPreflight.swift`).
+Update both `ios/` and `macos/` for native features. Container lookup is off the main thread and single-shot. `resolveContainerURL` calls back on the main actor, so a handler that then calls `FileManager`, URL resource values, or `NSFileVersion` must run that work through `respondOffMain` (or another background queue) and reply on the main queue. Keep only document objects and metadata queries on the main thread. Use the existing closure-injected seams for deterministic helper tests (`ios/icloud_storage_plus/Sources/icloud_storage_plus_foundation/UbiquityContainerResolver.swift`, `ios/icloud_storage_plus/Sources/icloud_storage_plus_foundation/WriteEntrypointPreflight.swift`).
 
 Acquire mutation lanes before coordination. Keep blocking Foundation coordination off Swift cooperative-pool threads. Existing-file replacement uses staging and coordinated replacement rather than remove-then-write, rejects directory destinations, and leaves version resolution to explicit callers (`ios/icloud_storage_plus/Sources/icloud_storage_plus_foundation/PerPathMutationLane.swift`, `ios/icloud_storage_plus/Sources/icloud_storage_plus_foundation/CoordinatedReplaceWriter.swift`).
 

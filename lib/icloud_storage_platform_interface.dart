@@ -161,8 +161,8 @@ abstract class ICloudStoragePlatform extends PlatformInterface {
   /// Trailing slashes are rejected here because reads are file-centric.
   ///
   /// Returns the local file contents as a String when Apple has local bytes
-  /// available for the document. Coordinated access uses UIDocument/NSDocument
-  /// and loads the full contents into memory. Text is decoded as UTF-8; use
+  /// available for the document. A coordinated read loads the full contents
+  /// into memory. Text is decoded as UTF-8; use
   /// [readInPlaceBytes] for binary formats.
   ///
   /// Throws on file-not-found and other failures.
@@ -183,8 +183,8 @@ abstract class ICloudStoragePlatform extends PlatformInterface {
   /// Trailing slashes are rejected here because reads are file-centric.
   ///
   /// Returns the local file contents as bytes when Apple has local bytes
-  /// available for the document. Coordinated access uses UIDocument/NSDocument
-  /// and loads the full contents into memory. Use for small files.
+  /// available for the document. A coordinated read loads the full contents
+  /// into memory. Use for small files.
   ///
   /// Throws on file-not-found and other failures.
   Future<Uint8List> readInPlaceBytes({
@@ -192,6 +192,23 @@ abstract class ICloudStoragePlatform extends PlatformInterface {
     required String relativePath,
   }) async {
     throw UnimplementedError('readInPlaceBytes() has not been implemented.');
+  }
+
+  /// Read many files in place as bytes with one coordinated read.
+  ///
+  /// [containerId] is the iCloud Container Id.
+  /// [relativePaths] are relative paths to files inside the container.
+  ///
+  /// Returns a map from each relative path, as passed, to the file's bytes.
+  /// A path with no file is left out of the map. Any other read failure fails
+  /// the whole call.
+  Future<Map<String, Uint8List>> readInPlaceBytesMany({
+    required String containerId,
+    required List<String> relativePaths,
+  }) async {
+    throw UnimplementedError(
+      'readInPlaceBytesMany() has not been implemented.',
+    );
   }
 
   /// Write a file in place inside the iCloud container using coordinated
@@ -292,6 +309,59 @@ abstract class ICloudStoragePlatform extends PlatformInterface {
     required String toRelativePath,
   }) async {
     throw UnimplementedError('copy() has not been implemented.');
+  }
+
+  /// Create a directory, and any missing parents, in the iCloud container.
+  ///
+  /// [containerId] is the iCloud Container Id.
+  ///
+  /// [relativePath] is the relative path of the directory.
+  ///
+  /// Native and channel failures use typed `ICloudOperationException`
+  /// subclasses in the default method-channel implementation.
+  Future<void> createDirectory({
+    required String containerId,
+    required String relativePath,
+  }) async {
+    throw UnimplementedError('createDirectory() has not been implemented.');
+  }
+
+  /// Move a local item into the iCloud container with
+  /// `setUbiquitous(true, ...)`.
+  ///
+  /// [containerId] is the iCloud Container Id.
+  ///
+  /// [localPath] is the absolute path of the local file or directory.
+  ///
+  /// [relativePath] is the destination in the container. It must not exist.
+  ///
+  /// Native and channel failures use typed `ICloudOperationException`
+  /// subclasses in the default method-channel implementation.
+  Future<void> moveIntoContainer({
+    required String containerId,
+    required String localPath,
+    required String relativePath,
+  }) async {
+    throw UnimplementedError('moveIntoContainer() has not been implemented.');
+  }
+
+  /// Move an item out of the iCloud container to a local path with
+  /// `setUbiquitous(false, ...)`.
+  ///
+  /// [containerId] is the iCloud Container Id.
+  ///
+  /// [relativePath] is the item in the container.
+  ///
+  /// [localPath] is the absolute local destination. It must not exist.
+  ///
+  /// Native and channel failures use typed `ICloudOperationException`
+  /// subclasses in the default method-channel implementation.
+  Future<void> moveOutOfContainer({
+    required String containerId,
+    required String relativePath,
+    required String localPath,
+  }) async {
+    throw UnimplementedError('moveOutOfContainer() has not been implemented.');
   }
 
   /// Check if a file or directory exists without downloading
