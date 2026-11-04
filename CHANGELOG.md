@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.2.0](https://github.com/Jason-Holt-Digital/icloud_storage_plus/compare/4.1.2...4.2.0) (2026-11-04)
+
+
+### Features
+
+* add a CloudKit sync bridge for CKSyncEngine ([#65](https://github.com/Jason-Holt-Digital/icloud_storage_plus/issues/65)) ([d157d33](https://github.com/Jason-Holt-Digital/icloud_storage_plus/commit/d157d3358b373a28d06403e09391efc21674d2fb))
+
 ## [4.1.2](https://github.com/Jason-Holt-Digital/icloud_storage_plus/compare/4.1.1...4.1.2) (2026-10-28)
 
 
