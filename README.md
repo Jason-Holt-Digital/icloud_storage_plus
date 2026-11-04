@@ -704,7 +704,7 @@ abstract class LibrarySync implements CloudKitSyncDelegate {
         await applyServerChanges(event);
       case CloudKitSentRecordZoneChanges():
         // Keep each saved record's systemFields, and resolve failures such
-        // as CKErrorCode.serverRecordChanged.
+        // as CloudKitErrorCode.serverRecordChanged.
         await handleSentChanges(event);
       default:
         break;
@@ -744,14 +744,32 @@ How the bridge behaves:
   unhandled changes are delivered again after the next `start`. Later calls
   throw `CloudKitSyncException.engineNotRunning` with the reason.
 - `nextRecordZoneChangeBatch` receives up to 250 pending changes. Returning
-  null or an empty batch ends the send; the changes stay pending.
+  null or an empty batch ends the send; the changes stay pending. If it
+  throws, the send ends the same way and the error goes to
+  `FlutterError.reportError`. For a change whose record no longer exists
+  locally, call `removePendingRecordZoneChanges`. If the native side cannot
+  read the returned batch, the engine stops and later calls throw
+  `engineNotRunning` with the reason.
 - Record fields hold `String`, `int`, `double`, `Uint8List`, or lists of those.
-  Files travel as `assets`. A received asset file belongs to CloudKit, so copy
-  it before `handleEvent` returns.
+  A received record with any other field type, such as a date, a boolean, a
+  reference, or a location, stops the engine. Later calls throw
+  `engineNotRunning` with a message naming the record type, record, and
+  field, and the engine stops again after each start until that record is
+  fixed.
+- Files travel as `assets`. A received asset file belongs to CloudKit, so copy
+  it before `handleEvent` returns. A received asset is null when CloudKit did
+  not download it, as for the `serverRecord` of a `serverRecordChanged`
+  error. Asset source and destination paths must be in the app's own
+  container, not the iCloud Drive container; the bridge does not coordinate
+  file access.
 - The app runs one engine at a time. Starting an engine replaces the running
   one.
 - Failures throw `CloudKitSyncException`. For `nativeError`, `nativeDomain` and
-  `nativeCode` keep the original CloudKit error.
+  `nativeCode` keep the original CloudKit error. `CloudKitErrorCode` names the
+  codes apps usually act on, including `quotaExceeded`; compare other codes
+  with their `CKError.Code` raw values.
+- The example app is not set up for CloudKit, so it does not exercise the
+  bridge.
 
 ### Large files in a separate zone
 

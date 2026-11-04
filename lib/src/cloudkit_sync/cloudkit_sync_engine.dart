@@ -24,7 +24,14 @@ abstract interface class CloudKitSyncDelegate {
   ///
   /// [pendingChanges] lists up to 250 changes in the request's scope. Return
   /// records for some or all of them. Null or an empty batch ends the send,
-  /// and so does an error; the changes stay pending.
+  /// and so does an error; the changes stay pending. For a change whose
+  /// record no longer exists locally, call
+  /// [CloudKitSyncEngine.removePendingRecordZoneChanges] so the engine stops
+  /// asking for it.
+  ///
+  /// If the native side cannot read the returned batch, the engine stops and
+  /// later calls throw [CloudKitSyncException.engineNotRunning] with the
+  /// reason.
   Future<CloudKitRecordZoneChangeBatch?> nextRecordZoneChangeBatch(
     List<CloudKitPendingRecordZoneChange> pendingChanges,
   );
@@ -38,7 +45,9 @@ abstract interface class CloudKitSyncDelegate {
 /// how to apply fetched records, and how to resolve conflicts.
 ///
 /// Requires iOS 17 or macOS 14. The app runs one engine at a time; starting
-/// an engine replaces the running one.
+/// an engine replaces the running one. Every method other than [start] acts
+/// on that one running native engine, whatever this instance's
+/// [containerId] is.
 final class CloudKitSyncEngine {
   /// Creates a CloudKitSyncEngine for [containerId], such as
   /// `iCloud.com.example.app`.

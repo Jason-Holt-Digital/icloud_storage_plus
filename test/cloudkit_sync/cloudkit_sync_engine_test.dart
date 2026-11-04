@@ -199,8 +199,10 @@ void main() {
   });
 
   test('a batch with an unsupported field value replies an error', () async {
-    FlutterError.onError = (_) {};
-    addTearDown(() => FlutterError.onError = FlutterError.presentError);
+    final reported = <FlutterErrorDetails>[];
+    final previousOnError = FlutterError.onError;
+    FlutterError.onError = reported.add;
+    addTearDown(() => FlutterError.onError = previousOnError);
     delegate.batch = const CloudKitRecordZoneChangeBatch(
       recordsToSave: [
         CloudKitRecord(id: id, recordType: 'Book', fields: {'read': true}),
@@ -219,6 +221,7 @@ void main() {
         ),
       ),
     );
+    expect(reported.single.exception, isA<ArgumentError>());
   });
 
   test('a failed start leaves events with the running delegate', () async {

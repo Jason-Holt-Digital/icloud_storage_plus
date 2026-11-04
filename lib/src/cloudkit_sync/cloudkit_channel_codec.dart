@@ -25,7 +25,7 @@ abstract final class CloudKitChannelCodec {
   /// Encodes [record] for a save.
   ///
   /// Throws an [ArgumentError] for a field value CloudKit cannot store
-  /// through the bridge.
+  /// through the bridge, or for an asset without a file.
   static Map<String, Object?> encodeRecord(CloudKitRecord record) {
     for (final MapEntry(:key, :value) in record.fields.entries) {
       final supported = switch (value) {
@@ -41,13 +41,18 @@ abstract final class CloudKitChannelCodec {
         );
       }
     }
+    for (final MapEntry(:key, :value) in record.assets.entries) {
+      if (value == null) {
+        throw ArgumentError.value(value, 'assets[$key]', 'Must be a file');
+      }
+    }
     return {
       'id': encodeRecordId(record.id),
       'recordType': record.recordType,
       'fields': record.fields,
       'assets': {
         for (final MapEntry(:key, :value) in record.assets.entries)
-          key: value.path,
+          key: value!.path,
       },
       'systemFields': record.systemFields,
     };
@@ -70,7 +75,7 @@ abstract final class CloudKitChannelCodec {
       assets: {
         for (final MapEntry(:key, :value)
             in (map['assets']! as Map<Object?, Object?>).entries)
-          key! as String: File(value! as String),
+          key! as String: value == null ? null : File(value as String),
       },
       systemFields: map['systemFields'] as Uint8List?,
     );

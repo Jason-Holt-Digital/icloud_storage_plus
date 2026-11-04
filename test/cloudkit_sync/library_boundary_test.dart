@@ -48,6 +48,28 @@ void main() {
     }
   });
 
+  test('iOS and macOS bridge Swift sources and tests are identical', () {
+    const ios = 'ios/icloud_storage_plus/Sources/icloud_storage_plus_cloudkit';
+    const macos =
+        'macos/icloud_storage_plus/Sources/icloud_storage_plus_cloudkit';
+    List<File> files(String root) => Directory(root)
+        .listSync(recursive: true)
+        .whereType<File>()
+        .where((file) => !file.path.contains('/.build/'))
+        .toList();
+    final iosFiles = files(ios);
+    expect(iosFiles, isNotEmpty);
+    expect(files(macos), hasLength(iosFiles.length));
+    for (final file in iosFiles) {
+      final counterpart = File(file.path.replaceFirst(ios, macos));
+      expect(
+        counterpart.readAsBytesSync(),
+        file.readAsBytesSync(),
+        reason: '${counterpart.path} differs from ${file.path}',
+      );
+    }
+  });
+
   for (final platform in ['ios', 'macos']) {
     final sources = '$platform/icloud_storage_plus/Sources';
 

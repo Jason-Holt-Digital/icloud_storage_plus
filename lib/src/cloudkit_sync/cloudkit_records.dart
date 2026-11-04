@@ -44,14 +44,26 @@ final class CloudKitRecord {
   ///
   /// Saving a record built from [systemFields] sends only these fields; fields
   /// left out keep their server values.
+  ///
+  /// The bridge cannot deliver a received record with any other field type,
+  /// such as a date, a boolean, a reference, or a location. Receiving one
+  /// stops the engine, and later calls throw
+  /// `CloudKitSyncException.engineNotRunning` with a message that names the
+  /// record type, record, and field. The engine stays stopped across starts
+  /// until that record no longer holds the value.
   final Map<String, Object?> fields;
 
   /// Files carried as CloudKit assets, keyed by field name.
   ///
   /// A received asset file belongs to CloudKit. It stays readable only until
   /// the call that delivered it completes, so copy what you need to keep. A
-  /// file being saved must stay in place until the save is reported.
-  final Map<String, File> assets;
+  /// received value is null when the server has an asset in that field but
+  /// CloudKit did not download it, as in the `serverRecord` of a
+  /// `CloudKitItemError`.
+  ///
+  /// A record being saved must give a file for every asset, and the file must
+  /// stay in place until the save is reported.
+  final Map<String, File?> assets;
 
   /// CloudKit's archived system fields from the last server copy, or null for
   /// a record the server has never stored. Pass them back unchanged when

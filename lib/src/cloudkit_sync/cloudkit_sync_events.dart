@@ -129,59 +129,31 @@ final class CloudKitItemError {
     this.serverRecord,
   });
 
-  /// `CKError.Code` raw value; see [CKErrorCode].
+  /// `CKError.Code` raw value; see [CloudKitErrorCode].
   final int code;
 
   /// CloudKit's description of the error.
   final String message;
 
-  /// Current server copy, for [CKErrorCode.serverRecordChanged].
+  /// Current server copy, for [CloudKitErrorCode.serverRecordChanged]. Its
+  /// asset values are null because CloudKit does not download them.
   final CloudKitRecord? serverRecord;
 }
 
-/// `CKError.Code` raw values that sync code commonly resolves.
-abstract final class CKErrorCode {
-  /// Network unavailable; the engine retries.
-  static const networkUnavailable = 3;
-
-  /// Network failure; the engine retries.
-  static const networkFailure = 4;
-
-  /// Service unavailable; the engine retries.
-  static const serviceUnavailable = 6;
-
-  /// Request rate limited; the engine retries.
-  static const requestRateLimited = 7;
-
-  /// Not signed in; the engine retries.
-  static const notAuthenticated = 9;
-
+/// `CKError.Code` raw values that an app acts on. Compare any other code
+/// with its raw value from Apple's `CKError.Code` documentation.
+abstract final class CloudKitErrorCode {
   /// The record does not exist on the server.
   static const unknownItem = 11;
 
   /// The server holds a newer copy than the one the save was based on.
   static const serverRecordChanged = 14;
 
-  /// The operation was cancelled.
-  static const operationCancelled = 20;
-
-  /// Another record in the same atomic request failed.
-  static const batchRequestFailed = 22;
-
-  /// The zone is busy; the engine retries.
-  static const zoneBusy = 23;
-
   /// The user's iCloud storage is full.
   static const quotaExceeded = 25;
 
   /// The zone does not exist on the server.
   static const zoneNotFound = 26;
-
-  /// The request was too large.
-  static const limitExceeded = 27;
-
-  /// The account is temporarily unavailable; the engine retries.
-  static const accountTemporarilyUnavailable = 36;
 }
 
 /// A zone save or delete that failed.

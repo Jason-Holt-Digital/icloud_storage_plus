@@ -26,7 +26,7 @@ actor CloudKitSyncBridge: CKSyncEngineDelegate {
     self.callDart = callDart
   }
 
-  /// Replaces any running engine with a new one for [containerID].
+  /// Replaces any running engine with a new one for `containerID`.
   func start(containerID: String, stateSerialization: CKSyncEngine.State.Serialization?, excludedZoneNames: [String]) async {
     if let engine {
       self.engine = nil
@@ -75,8 +75,8 @@ actor CloudKitSyncBridge: CKSyncEngineDelegate {
     return engine
   }
 
-  /// Drops [stoppedEngine] if it is still the current engine, so no later
-  /// event from it reaches Dart.
+  /// Drops `stoppedEngine` if it is still the current engine, so no later
+  /// event from it reaches Dart. Dart's next call fails with `reason`.
   private func stop(_ stoppedEngine: CKSyncEngine?, reason: String) async {
     guard let stoppedEngine, stoppedEngine === engine else { return }
     engine = nil
@@ -84,7 +84,7 @@ actor CloudKitSyncBridge: CKSyncEngineDelegate {
     await stoppedEngine.cancelOperations()
   }
 
-  /// Narrows a fetch [scope] so it never includes [excludedZoneIDs].
+  /// Narrows a fetch `scope` so it never includes `excludedZoneIDs`.
   static func scope(
     _ scope: CKSyncEngine.FetchChangesOptions.Scope,
     excluding excludedZoneIDs: [CKRecordZone.ID]
@@ -133,12 +133,21 @@ actor CloudKitSyncBridge: CKSyncEngineDelegate {
     guard !pendingChanges.isEmpty else { return nil }
 
     // A failed or empty reply ends this send. The changes stay pending, and
-    // the engine asks again on its next send.
+    // the engine asks again on its next send. Dart has already reported its
+    // own failure.
     guard
       let reply = try? await callDart("nextRecordZoneChangeBatch", ["pendingChanges": pendingChanges]),
-      !(reply is NSNull),
-      let batch = try? CloudKitRecordCodec.decodeBatch(reply)
+      !(reply is NSNull)
     else { return nil }
+    let batch: (recordsToSave: [CKRecord], recordIDsToDelete: [CKRecord.ID])
+    do {
+      batch = try CloudKitRecordCodec.decodeBatch(reply)
+    } catch {
+      // Dart cannot see this failure, and every later send would fail the
+      // same way, so stop and give the next Dart call the reason.
+      await stop(syncEngine, reason: "A record batch could not be read: \(error)")
+      return nil
+    }
     let recordsByID = Dictionary(
       batch.recordsToSave.map { ($0.recordID, $0) },
       uniquingKeysWith: { _, last in last }

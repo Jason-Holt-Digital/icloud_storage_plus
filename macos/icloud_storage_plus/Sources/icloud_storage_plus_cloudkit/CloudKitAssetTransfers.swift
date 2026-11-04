@@ -12,16 +12,14 @@ struct CloudKitSyncMissingAsset: Error {
 enum CloudKitAssetTransfers {
   static func recordExists(in database: CKDatabase, id: CKRecord.ID) async throws -> Bool {
     do {
-      let results = try await database.records(for: [id], desiredKeys: [])
-      guard let result = results[id] else { return false }
-      _ = try result.get()
+      _ = try await database.records(for: [id], desiredKeys: [])[id]?.get()
       return true
     } catch let error as CKError where error.code == .unknownItem || error.code == .zoneNotFound {
       return false
     }
   }
 
-  /// Saves [source] as the asset in [field] of the record [id], creating the
+  /// Saves `source` as the asset in `field` of the record `id`, creating the
   /// record's zone when it does not exist yet. An existing record is
   /// overwritten.
   static func upload(
@@ -46,7 +44,7 @@ enum CloudKitAssetTransfers {
     _ = try records.saveResults[id]?.get()
   }
 
-  /// Copies the asset in [field] of the record [id] to [destination],
+  /// Copies the asset in `field` of the record `id` to `destination`,
   /// replacing any file there.
   static func download(
     from database: CKDatabase,
@@ -55,8 +53,7 @@ enum CloudKitAssetTransfers {
     destination: URL,
     onProgress: @escaping @Sendable (Double) -> Void
   ) async throws {
-    // Replacing the destination removes what is there, and removing a
-    // directory deletes everything in it.
+    // Replacing a directory would delete everything in it.
     var isDirectory: ObjCBool = false
     if FileManager.default.fileExists(atPath: destination.path, isDirectory: &isDirectory), isDirectory.boolValue {
       throw CloudKitSyncInvalidArgument(message: "destinationPath is a directory")
@@ -74,12 +71,23 @@ enum CloudKitAssetTransfers {
             throw CloudKitSyncMissingAsset(field: field)
           }
           // The asset file lives in CloudKit's cache, which may be cleared
-          // once the operation finishes, so copy it now.
+          // once the operation finishes, so copy it now. The copy goes beside
+          // the destination first, so the destination changes in one step
+          // and keeps its old content if the copy fails.
           let fileManager = FileManager.default
-          if fileManager.fileExists(atPath: destination.path) {
-            try fileManager.removeItem(at: destination)
+          let staged = destination.deletingLastPathComponent()
+            .appendingPathComponent(".\(destination.lastPathComponent).\(UUID().uuidString).download")
+          do {
+            try fileManager.copyItem(at: url, to: staged)
+            if fileManager.fileExists(atPath: destination.path) {
+              _ = try fileManager.replaceItemAt(destination, withItemAt: staged)
+            } else {
+              try fileManager.moveItem(at: staged, to: destination)
+            }
+          } catch {
+            try? fileManager.removeItem(at: staged)
+            throw error
           }
-          try fileManager.copyItem(at: url, to: destination)
         }
       }
       operation.fetchRecordsResultBlock = { result in

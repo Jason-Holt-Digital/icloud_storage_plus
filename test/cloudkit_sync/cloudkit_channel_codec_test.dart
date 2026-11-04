@@ -9,7 +9,10 @@ import 'helpers.dart';
 void main() {
   const id = CloudKitRecordId(zoneName: 'Library', recordName: 'book-1');
   const idMap = {'zoneName': 'Library', 'recordName': 'book-1'};
-  final error = {'code': CKErrorCode.serverRecordChanged, 'message': 'Newer'};
+  final error = {
+    'code': CloudKitErrorCode.serverRecordChanged,
+    'message': 'Newer',
+  };
 
   T decode<T extends CloudKitSyncEvent>(Map<String, Object?> payload) =>
       CloudKitChannelCodec.decodeEvent(payload) as T;
@@ -25,6 +28,15 @@ void main() {
     expect(record.fields, {'title': 'Tome', 'pages': 320});
     expect(record.assets['cover']!.path, '/cache/cover.png');
     expect(record.systemFields, Uint8List.fromList([1, 2, 3]));
+  });
+
+  test('keeps an asset that was not downloaded as a null value', () {
+    final record = CloudKitChannelCodec.decodeRecord({
+      ...recordMap(),
+      'assets': {'cover': null},
+    });
+
+    expect(record.assets, {'cover': null});
   });
 
   test('decodes account changes', () {
@@ -85,18 +97,21 @@ void main() {
       'failedRecordDeletes': [
         {
           'id': idMap,
-          'error': {'code': CKErrorCode.zoneNotFound, 'message': 'No zone'},
+          'error': {
+            'code': CloudKitErrorCode.zoneNotFound,
+            'message': 'No zone',
+          },
         },
       ],
     });
 
     expect(sent.savedRecords.single.id, id);
     final failedSave = sent.failedRecordSaves.single;
-    expect(failedSave.error.code, CKErrorCode.serverRecordChanged);
+    expect(failedSave.error.code, CloudKitErrorCode.serverRecordChanged);
     expect(failedSave.error.serverRecord!.id, id);
     expect(sent.deletedRecordIds, [id]);
     final failedDelete = sent.failedRecordDeletes.single;
-    expect(failedDelete.error.code, CKErrorCode.zoneNotFound);
+    expect(failedDelete.error.code, CloudKitErrorCode.zoneNotFound);
     expect(failedDelete.error.serverRecord, isNull);
   });
 
@@ -126,7 +141,7 @@ void main() {
           'string': 'a',
           'int': 1,
           'double': 1.5,
-          'bytes': Uint8List(1),
+          'bytes': Uint8List.fromList([7, 8]),
           'list': [1, 2],
           'removed': null,
         },
@@ -134,7 +149,29 @@ void main() {
     );
 
     expect(encoded['systemFields'], isNull);
-    expect((encoded['fields']! as Map).keys, hasLength(6));
+    expect(encoded['fields'], {
+      'string': 'a',
+      'int': 1,
+      'double': 1.5,
+      'bytes': isA<Uint8List>().having((b) => b.toList(), 'bytes', [7, 8]),
+      'list': [1, 2],
+      'removed': null,
+    });
+  });
+
+  test('rejects a saved asset without a file', () {
+    expect(
+      () => CloudKitChannelCodec.encodeRecord(
+        const CloudKitRecord(
+          id: id,
+          recordType: 'Book',
+          assets: {'cover': null},
+        ),
+      ),
+      throwsA(
+        isA<ArgumentError>().having((e) => e.name, 'name', 'assets[cover]'),
+      ),
+    );
   });
 
   test('rejects unsupported field values when encoding', () {

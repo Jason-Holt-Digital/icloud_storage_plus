@@ -1,13 +1,17 @@
 #if os(iOS)
-import Flutter
+@preconcurrency import Flutter
 #else
-import FlutterMacOS
+@preconcurrency import FlutterMacOS
 #endif
 import CloudKit
 import Foundation
 
 /// The Flutter side of the CloudKit sync bridge: its own method channel, kept
 /// apart from document storage.
+///
+/// Flutter registers plugins, calls method channel handlers, and delivers
+/// replies on the main thread, so the class is isolated to the main actor.
+@MainActor
 final class CloudKitSyncChannel: NSObject {
   static let channelName = "icloud_storage_plus/cloudkit_sync"
 
@@ -20,16 +24,20 @@ final class CloudKitSyncChannel: NSObject {
     self.channel = channel
   }
 
-  static func register(with registrar: FlutterPluginRegistrar) {
-    #if os(iOS)
-    let messenger = registrar.messenger()
-    #else
-    let messenger = registrar.messenger
-    #endif
-    let channel = FlutterMethodChannel(name: channelName, binaryMessenger: messenger)
-    let instance = CloudKitSyncChannel(channel: channel)
-    channel.setMethodCallHandler { call, result in
-      instance.handle(call, result: result)
+  nonisolated static func register(with registrar: FlutterPluginRegistrar) {
+    MainActor.assumeIsolated {
+      #if os(iOS)
+      let messenger = registrar.messenger()
+      #else
+      let messenger = registrar.messenger
+      #endif
+      let channel = FlutterMethodChannel(name: channelName, binaryMessenger: messenger)
+      let instance = CloudKitSyncChannel(channel: channel)
+      channel.setMethodCallHandler { call, result in
+        MainActor.assumeIsolated {
+          instance.handle(call, result: result)
+        }
+      }
     }
   }
 
@@ -45,17 +53,17 @@ final class CloudKitSyncChannel: NSObject {
       return
     }
     let arguments = Self.plainValue(call.arguments) as? [String: Any] ?? [:]
-    Task { @MainActor in
+    Task {
       do {
         result(try await self.perform(call.method, arguments))
       } catch {
-        result(Self.flutterError(error))
+        let failure = CloudKitRecordCodec.encode(failure: error)
+        result(FlutterError(code: failure.code, message: failure.message, details: failure.details))
       }
     }
   }
 
   @available(iOS 17.0, macOS 14.0, *)
-  @MainActor
   private func perform(_ method: String, _ arguments: [String: Any]) async throws -> Any? {
     switch method {
     case "start":
@@ -64,16 +72,16 @@ final class CloudKitSyncChannel: NSObject {
         do {
           serialization = try JSONDecoder().decode(CKSyncEngine.State.Serialization.self, from: Data(state.utf8))
         } catch {
-          throw InvalidStateSerialization(underlying: error)
+          throw CloudKitSyncInvalidStateSerialization(underlying: error)
         }
       } else {
         serialization = nil
       }
       await bridge.start(
-        containerID: try CloudKitRecordCodec.string(arguments["containerId"], "containerId"),
+        containerID: try CloudKitRecordCodec.string(arguments["containerId"], named: "containerId"),
         stateSerialization: serialization,
-        excludedZoneNames: try CloudKitRecordCodec.list(arguments["excludedZoneNames"], "excludedZoneNames")
-          .map { try CloudKitRecordCodec.string($0, "excludedZoneNames") }
+        excludedZoneNames: try CloudKitRecordCodec.list(arguments["excludedZoneNames"], named: "excludedZoneNames")
+          .map { try CloudKitRecordCodec.string($0, named: "excludedZoneNames") }
       )
     case "stop":
       await bridge.stop()
@@ -102,22 +110,23 @@ final class CloudKitSyncChannel: NSObject {
       try await CloudKitAssetTransfers.upload(
         to: database(arguments),
         id: CloudKitRecordCodec.decodeRecordID(arguments["id"]),
-        recordType: CloudKitRecordCodec.string(arguments["recordType"], "recordType"),
-        field: CloudKitRecordCodec.string(arguments["field"], "field"),
-        source: URL(fileURLWithPath: CloudKitRecordCodec.string(arguments["sourcePath"], "sourcePath"))
+        recordType: CloudKitRecordCodec.string(arguments["recordType"], named: "recordType"),
+        field: CloudKitRecordCodec.string(arguments["field"], named: "field"),
+        source: URL(fileURLWithPath: CloudKitRecordCodec.string(arguments["sourcePath"], named: "sourcePath"))
       )
     case "downloadAsset":
       let transferId = arguments["transferId"] as? Int
-      let channel = self.channel
       try await CloudKitAssetTransfers.download(
         from: database(arguments),
         id: CloudKitRecordCodec.decodeRecordID(arguments["id"]),
-        field: CloudKitRecordCodec.string(arguments["field"], "field"),
-        destination: URL(fileURLWithPath: CloudKitRecordCodec.string(arguments["destinationPath"], "destinationPath")),
+        field: CloudKitRecordCodec.string(arguments["field"], named: "field"),
+        destination: URL(
+          fileURLWithPath: CloudKitRecordCodec.string(arguments["destinationPath"], named: "destinationPath")
+        ),
         onProgress: { fraction in
           guard let transferId else { return }
           DispatchQueue.main.async {
-            channel.invokeMethod("downloadProgress", arguments: ["transferId": transferId, "fraction": fraction])
+            self.channel.invokeMethod("downloadProgress", arguments: ["transferId": transferId, "fraction": fraction])
           }
         }
       )
@@ -128,23 +137,19 @@ final class CloudKitSyncChannel: NSObject {
   }
 
   @available(iOS 17.0, macOS 14.0, *)
-  @MainActor
   private var bridge: CloudKitSyncBridge {
     if let bridge = bridgeStorage as? CloudKitSyncBridge {
       return bridge
     }
-    let channel = self.channel
-    let bridge = CloudKitSyncBridge { method, arguments in
+    let bridge = CloudKitSyncBridge { @MainActor method, arguments in
       try await withCheckedThrowingContinuation { continuation in
-        DispatchQueue.main.async {
-          channel.invokeMethod(method, arguments: arguments) { reply in
-            if let error = reply as? FlutterError {
-              continuation.resume(throwing: DartError(code: error.code, message: error.message))
-            } else if (reply as? NSObject) === FlutterMethodNotImplemented {
-              continuation.resume(throwing: DartError(code: "notImplemented", message: method))
-            } else {
-              continuation.resume(returning: Self.plainValue(reply))
-            }
+        self.channel.invokeMethod(method, arguments: arguments) { reply in
+          if let error = reply as? FlutterError {
+            continuation.resume(throwing: DartError(code: error.code, message: error.message))
+          } else if (reply as? NSObject) === FlutterMethodNotImplemented {
+            continuation.resume(throwing: DartError(code: "notImplemented", message: method))
+          } else {
+            continuation.resume(returning: Self.plainValue(reply))
           }
         }
       }
@@ -155,14 +160,14 @@ final class CloudKitSyncChannel: NSObject {
 
   @available(iOS 17.0, macOS 14.0, *)
   private func database(_ arguments: [String: Any]) throws -> CKDatabase {
-    CKContainer(identifier: try CloudKitRecordCodec.string(arguments["containerId"], "containerId"))
+    CKContainer(identifier: try CloudKitRecordCodec.string(arguments["containerId"], named: "containerId"))
       .privateCloudDatabase
   }
 
   /// Replaces Flutter typed data with `Data`, recursively, so the codec stays
   /// free of Flutter types. Outgoing `Data` needs no conversion: the standard
   /// codec writes it as bytes.
-  private static func plainValue(_ value: Any?) -> Any? {
+  private nonisolated static func plainValue(_ value: Any?) -> Any? {
     switch value {
     case let typed as FlutterStandardTypedData:
       return typed.data
@@ -174,30 +179,6 @@ final class CloudKitSyncChannel: NSObject {
       return value
     }
   }
-
-  private static func flutterError(_ error: Error) -> FlutterError {
-    switch error {
-    case let error as CloudKitSyncInvalidArgument:
-      return FlutterError(code: "invalidArgument", message: error.message, details: nil)
-    case let error as InvalidStateSerialization:
-      return FlutterError(code: "invalidStateSerialization", message: "\(error.underlying)", details: nil)
-    case let error as CloudKitSyncEngineNotRunning:
-      return FlutterError(code: "engineNotRunning", message: error.reason, details: nil)
-    case let error as CloudKitSyncMissingAsset:
-      return FlutterError(code: "missingAsset", message: "The record has no asset in \(error.field).", details: nil)
-    default:
-      let nsError = error as NSError
-      return FlutterError(
-        code: "nativeError",
-        message: nsError.localizedDescription,
-        details: ["domain": nsError.domain, "code": nsError.code]
-      )
-    }
-  }
-}
-
-private struct InvalidStateSerialization: Error {
-  let underlying: Error
 }
 
 private struct DartError: Error, CustomStringConvertible {

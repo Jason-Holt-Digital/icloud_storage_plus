@@ -1,9 +1,17 @@
 import CloudKit
 import Foundation
 
-/// A channel argument from Dart that does not match the bridge's contract.
-struct CloudKitSyncInvalidArgument: Error {
+/// A channel argument from Dart, or a value from CloudKit, that does not match
+/// the bridge's contract.
+struct CloudKitSyncInvalidArgument: Error, CustomStringConvertible {
   let message: String
+
+  var description: String { message }
+}
+
+/// The engine state passed to start could not be decoded.
+struct CloudKitSyncInvalidStateSerialization: Error {
+  let underlying: Error
 }
 
 /// Converts CloudKit values to and from the plain dictionaries that cross the
@@ -17,15 +25,15 @@ enum CloudKitRecordCodec {
 
   static func encode(_ record: CKRecord) throws -> [String: Any] {
     var fields: [String: Any] = [:]
-    var assets: [String: String] = [:]
+    var assets: [String: Any] = [:]
     for key in record.allKeys() {
       let value = record[key]
       if let asset = value as? CKAsset {
-        if let url = asset.fileURL {
-          assets[key] = url.path
-        }
+        // CloudKit does not download the assets of the server record attached
+        // to a serverRecordChanged error, so their fileURL is nil.
+        assets[key] = asset.fileURL?.path ?? NSNull()
       } else if let value {
-        fields[key] = try encodeFieldValue(value, field: key)
+        fields[key] = try encodeFieldValue(value, field: key, of: record)
       }
     }
     let archiver = NSKeyedArchiver(requiringSecureCoding: true)
@@ -41,9 +49,9 @@ enum CloudKitRecordCodec {
   }
 
   static func decodeRecord(_ value: Any?) throws -> CKRecord {
-    let map = try dictionary(value, "record")
+    let map = try dictionary(value, named: "record")
     let id = try decodeRecordID(map["id"])
-    let recordType = try string(map["recordType"], "recordType")
+    let recordType = try string(map["recordType"], named: "recordType")
     let record: CKRecord
     if let systemFields = map["systemFields"] as? Data {
       let unarchiver = try NSKeyedUnarchiver(forReadingFrom: systemFields)
@@ -58,20 +66,25 @@ enum CloudKitRecordCodec {
     } else {
       record = CKRecord(recordType: recordType, recordID: id)
     }
-    for (key, value) in try dictionary(map["fields"], "fields") {
+    for (key, value) in try dictionary(map["fields"], named: "fields") {
       if value is NSNull {
         record[key] = nil
       } else {
         record.setObject(try decodeFieldValue(value, field: key), forKey: key)
       }
     }
-    for (key, path) in try dictionary(map["assets"], "assets") {
-      record[key] = CKAsset(fileURL: URL(fileURLWithPath: try string(path, key)))
+    for (key, path) in try dictionary(map["assets"], named: "assets") {
+      record[key] = CKAsset(fileURL: URL(fileURLWithPath: try string(path, named: key)))
     }
     return record
   }
 
-  private static func encodeFieldValue(_ value: CKRecordValue, field: String) throws -> Any {
+  private static func encodeFieldValue(_ value: CKRecordValue, field: String, of record: CKRecord) throws -> Any {
+    // A Bool arrives as a CFBoolean, which also matches NSNumber. Dart has no
+    // matching field type, so reject it with the other unsupported types.
+    if CFGetTypeID(value) == CFBooleanGetTypeID() {
+      throw unsupportedFieldValue(value, field: field, of: record)
+    }
     switch value {
     case let string as String:
       return string
@@ -81,12 +94,17 @@ enum CloudKitRecordCodec {
     case let data as Data:
       return data
     case let list as [CKRecordValue]:
-      return try list.map { try encodeFieldValue($0, field: field) }
+      return try list.map { try encodeFieldValue($0, field: field, of: record) }
     default:
-      throw CloudKitSyncInvalidArgument(
-        message: "Field \(field) holds a \(type(of: value)), which the bridge does not support"
-      )
+      throw unsupportedFieldValue(value, field: field, of: record)
     }
+  }
+
+  private static func unsupportedFieldValue(_ value: CKRecordValue, field: String, of record: CKRecord) -> Error {
+    CloudKitSyncInvalidArgument(
+      message: "Field \(field) of \(record.recordType) record \(record.recordID.zoneID.zoneName)/"
+        + "\(record.recordID.recordName) holds a \(type(of: value)), which the bridge does not support"
+    )
   }
 
   private static func decodeFieldValue(_ value: Any, field: String) throws -> __CKRecordObjCValue {
@@ -113,10 +131,10 @@ enum CloudKitRecordCodec {
   }
 
   static func decodeRecordID(_ value: Any?) throws -> CKRecord.ID {
-    let map = try dictionary(value, "id")
+    let map = try dictionary(value, named: "id")
     return CKRecord.ID(
-      recordName: try string(map["recordName"], "recordName"),
-      zoneID: CKRecordZone.ID(zoneName: try string(map["zoneName"], "zoneName"))
+      recordName: try string(map["recordName"], named: "recordName"),
+      zoneID: CKRecordZone.ID(zoneName: try string(map["zoneName"], named: "zoneName"))
     )
   }
 
@@ -132,8 +150,8 @@ enum CloudKitRecordCodec {
   }
 
   static func decodePendingRecordZoneChanges(_ value: Any?) throws -> [CKSyncEngine.PendingRecordZoneChange] {
-    try list(value, "changes").map { item in
-      let map = try dictionary(item, "change")
+    try list(value, named: "changes").map { item in
+      let map = try dictionary(item, named: "change")
       let id = try decodeRecordID(map["id"])
       switch map["type"] as? String {
       case "save": return .saveRecord(id)
@@ -144,9 +162,9 @@ enum CloudKitRecordCodec {
   }
 
   static func decodePendingDatabaseChanges(_ value: Any?) throws -> [CKSyncEngine.PendingDatabaseChange] {
-    try list(value, "changes").map { item in
-      let map = try dictionary(item, "change")
-      let zoneID = CKRecordZone.ID(zoneName: try string(map["zoneName"], "zoneName"))
+    try list(value, named: "changes").map { item in
+      let map = try dictionary(item, named: "change")
+      let zoneID = CKRecordZone.ID(zoneName: try string(map["zoneName"], named: "zoneName"))
       switch map["type"] as? String {
       case "saveZone": return .saveZone(CKRecordZone(zoneID: zoneID))
       case "deleteZone": return .deleteZone(zoneID)
@@ -157,10 +175,10 @@ enum CloudKitRecordCodec {
 
   /// Decodes Dart's reply to `nextRecordZoneChangeBatch`.
   static func decodeBatch(_ value: Any?) throws -> (recordsToSave: [CKRecord], recordIDsToDelete: [CKRecord.ID]) {
-    let map = try dictionary(value, "batch")
+    let map = try dictionary(value, named: "batch")
     return (
-      try list(map["recordsToSave"], "recordsToSave").map { try decodeRecord($0) },
-      try list(map["recordIDsToDelete"], "recordIDsToDelete").map { try decodeRecordID($0) }
+      try list(map["recordsToSave"], named: "recordsToSave").map { try decodeRecord($0) },
+      try list(map["recordIDsToDelete"], named: "recordIDsToDelete").map { try decodeRecordID($0) }
     )
   }
 
@@ -257,23 +275,41 @@ enum CloudKitRecordCodec {
     return map
   }
 
+  /// Maps a bridge failure to the code, message, and details of the
+  /// `FlutterError` that Dart turns into a `CloudKitSyncException`.
+  static func encode(failure error: Error) -> (code: String, message: String?, details: [String: Any]?) {
+    switch error {
+    case let error as CloudKitSyncInvalidArgument:
+      return ("invalidArgument", error.message, nil)
+    case let error as CloudKitSyncInvalidStateSerialization:
+      return ("invalidStateSerialization", "\(error.underlying)", nil)
+    case let error as CloudKitSyncEngineNotRunning:
+      return ("engineNotRunning", error.reason, nil)
+    case let error as CloudKitSyncMissingAsset:
+      return ("missingAsset", "The record has no asset in \(error.field).", nil)
+    default:
+      let nsError = error as NSError
+      return ("nativeError", nsError.localizedDescription, ["domain": nsError.domain, "code": nsError.code])
+    }
+  }
+
   // MARK: Argument helpers
 
-  static func dictionary(_ value: Any?, _ name: String) throws -> [String: Any] {
+  static func dictionary(_ value: Any?, named name: String) throws -> [String: Any] {
     guard let map = value as? [String: Any] else {
       throw CloudKitSyncInvalidArgument(message: "\(name) must be a map")
     }
     return map
   }
 
-  static func list(_ value: Any?, _ name: String) throws -> [Any] {
+  static func list(_ value: Any?, named name: String) throws -> [Any] {
     guard let list = value as? [Any] else {
       throw CloudKitSyncInvalidArgument(message: "\(name) must be a list")
     }
     return list
   }
 
-  static func string(_ value: Any?, _ name: String) throws -> String {
+  static func string(_ value: Any?, named name: String) throws -> String {
     guard let string = value as? String else {
       throw CloudKitSyncInvalidArgument(message: "\(name) must be a string")
     }
