@@ -28,10 +28,9 @@ actor CloudKitSyncBridge: CKSyncEngineDelegate {
 
   /// Replaces any running engine with a new one for `containerID`.
   func start(containerID: String, stateSerialization: CKSyncEngine.State.Serialization?, excludedZoneNames: [String]) async {
-    if let engine {
-      self.engine = nil
-      await engine.cancelOperations()
-    }
+    // Install the replacement before the only suspension point, so a start or
+    // stop that runs while the old engine cancels sees the new engine.
+    let previousEngine = engine
     excludedZoneIDs = excludedZoneNames.map { CKRecordZone.ID(zoneName: $0) }
     stopReason = nil
     engine = CKSyncEngine(
@@ -41,6 +40,7 @@ actor CloudKitSyncBridge: CKSyncEngineDelegate {
         delegate: self
       )
     )
+    await previousEngine?.cancelOperations()
   }
 
   func stop() async {
