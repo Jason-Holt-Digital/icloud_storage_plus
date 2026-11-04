@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:icloud_storage_plus/src/cloudkit_sync/cloudkit_channel_codec.dart';
 import 'package:icloud_storage_plus/src/cloudkit_sync/cloudkit_records.dart';
 import 'package:icloud_storage_plus/src/cloudkit_sync/cloudkit_sync_channel.dart';
+import 'package:icloud_storage_plus/src/cloudkit_sync/cloudkit_sync_exception.dart';
 
 /// Moves single assets to and from the CloudKit private database, outside
 /// `CloudKitSyncEngine`.
@@ -42,8 +43,9 @@ final class CloudKitAssetStore {
       });
 
   /// Writes the asset in [field] of the record [id] to [destination],
-  /// replacing any file there. [onProgress] receives the fraction of the
-  /// download completed, from 0 to 1.
+  /// replacing any file there. A [destination] that is a directory fails with
+  /// [CloudKitSyncException.invalidArgument]. [onProgress] receives the
+  /// fraction of the download completed, from 0 to 1.
   Future<void> downloadAsset({
     required CloudKitRecordId id,
     required String field,

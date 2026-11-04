@@ -47,8 +47,9 @@ shared point is a marked registration call in the plugin entry point. The
 bridge uses CloudKit only and never reads or writes the ubiquity container.
 
 The bridge owns the CloudKit boundary. It creates the engine from the app's
-saved state and forwards each engine event to Dart one at a time, waiting until
-Dart has handled it. It asks Dart for the records in each batch the engine
+saved state and forwards each engine event that carries data or results to
+Dart one at a time, waiting until Dart has handled it. The will/did fetch and
+send lifecycle events are not forwarded. It asks Dart for the records in each batch the engine
 sends, and it converts records, system fields, and assets across the channel.
 It also uploads and downloads single assets on demand, outside the engine.
 Apple's `CKSyncEngine` owns scheduling, retries, paging, push, and account

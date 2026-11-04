@@ -14,9 +14,10 @@ abstract interface class CloudKitSyncDelegate {
   /// unhandled changes are delivered again after the next start; calls then
   /// throw [CloudKitSyncException.engineNotRunning].
   ///
-  /// Do not await [CloudKitSyncEngine.fetchChanges] or
-  /// [CloudKitSyncEngine.sendChanges] here: they complete only after their
-  /// events are handled, so awaiting them from an event never completes.
+  /// Do not call [CloudKitSyncEngine.fetchChanges] or
+  /// [CloudKitSyncEngine.sendChanges] here. `CKSyncEngine` does not support
+  /// starting a fetch or send while it delivers an event, and both complete
+  /// only after their own events are handled.
   Future<void> handleEvent(CloudKitSyncEvent event);
 
   /// Builds the records for the next request the engine sends.

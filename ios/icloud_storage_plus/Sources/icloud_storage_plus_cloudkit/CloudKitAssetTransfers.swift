@@ -55,6 +55,12 @@ enum CloudKitAssetTransfers {
     destination: URL,
     onProgress: @escaping @Sendable (Double) -> Void
   ) async throws {
+    // Replacing the destination removes what is there, and removing a
+    // directory deletes everything in it.
+    var isDirectory: ObjCBool = false
+    if FileManager.default.fileExists(atPath: destination.path, isDirectory: &isDirectory), isDirectory.boolValue {
+      throw CloudKitSyncInvalidArgument(message: "destinationPath is a directory")
+    }
     let operation = CKFetchRecordsOperation(recordIDs: [id])
     operation.desiredKeys = [field]
     operation.qualityOfService = .userInitiated
