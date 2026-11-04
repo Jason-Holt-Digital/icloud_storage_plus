@@ -78,6 +78,9 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
     let instance = ICloudStoragePlugin()
     registrar.addMethodCallDelegate(instance, channel: channel)
     instance.messenger = messenger
+
+    // CloudKit sync bridge: a separate module with its own channel.
+    CloudKitSyncChannel.register(with: registrar)
   }
   
   /// Routes Flutter method calls to native handlers.

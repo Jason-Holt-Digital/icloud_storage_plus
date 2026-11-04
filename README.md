@@ -29,7 +29,8 @@ never reports "not synced yet" as an error.
 
 The core of the plugin is storing and syncing documents through iCloud Drive.
 It may grow to cover other iCloud features, such as the key-value store
-(`NSUbiquitousKeyValueStore`); there are no such methods yet.
+(`NSUbiquitousKeyValueStore`). A separate library, the
+[CloudKit sync bridge](#cloudkit-sync-bridge), syncs records through CloudKit.
 
 ## Platform support
 
@@ -37,6 +38,8 @@ It may grow to cover other iCloud features, such as the key-value store
 |----------|-----------------|
 | iOS | 13.0 |
 | macOS | 10.15 |
+
+The [CloudKit sync bridge](#cloudkit-sync-bridge) requires iOS 17 or macOS 14.
 
 ## Installation
 
@@ -57,10 +60,15 @@ flutter config --enable-swift-package-manager
 
 1. Create an iCloud Container ID (example: `iCloud.com.yourapp.container`)
 2. Enable iCloud for your App ID and assign that container
-3. In Xcode → your target → Signing & Capabilities:
-   - Add **iCloud**
-   - Enable **iCloud Documents**
-   - Select your container
+3. In Xcode → your target → Signing & Capabilities, add **iCloud**, select your
+   container, and enable the services for the features you use:
+
+| Feature | Xcode capability | Entitlements |
+|---------|------------------|--------------|
+| Document storage (`ICloudStorage`) | iCloud → **iCloud Documents** | `com.apple.developer.icloud-services` containing `CloudDocuments`; `com.apple.developer.icloud-container-identifiers` and `com.apple.developer.ubiquity-container-identifiers` listing your container |
+| CloudKit sync bridge (`CloudKitSyncEngine`, `CloudKitAssetStore`) | iCloud → **CloudKit**; **Push Notifications**; on iOS, **Background Modes** → **Remote notifications** | `com.apple.developer.icloud-services` containing `CloudKit`; `com.apple.developer.icloud-container-identifiers` listing your container; `aps-environment` (iOS) or `com.apple.developer.aps-environment` (macOS); on iOS, `remote-notification` in `UIBackgroundModes` in `Info.plist` |
+
+An app that uses both features enables both services for the same container.
 
 ### Files app integration (optional)
 
@@ -651,6 +659,129 @@ downloading are not typed plugin exceptions. Metadata APIs can still report
 those states as metadata, but request/response operations no longer manufacture
 timeout/readiness failures from them.
 
+## CloudKit sync bridge
+
+`package:icloud_storage_plus/cloudkit_sync.dart` is a separate library that
+wraps Apple's
+[`CKSyncEngine`](https://developer.apple.com/documentation/cloudkit/cksyncengine)
+for the CloudKit private database. It requires iOS 17 or macOS 14; on older
+versions every call throws a `CloudKitSyncException` with the code
+`unsupportedPlatformVersion`. It uses CloudKit only and never touches the iCloud
+Drive container, and it shares no code or state with document storage.
+
+`CKSyncEngine` schedules fetches and sends, retries failures, pages through
+changes, and listens for push notifications and account changes. Your app makes
+every sync decision: what to send, how to apply fetched records, how to resolve
+conflicts, and what to do when the account changes or a zone is deleted.
+
+```dart
+import 'package:icloud_storage_plus/cloudkit_sync.dart';
+
+/// Connects the engine to the app's own storage, declared at the end.
+abstract class LibrarySync implements CloudKitSyncDelegate {
+  final engine = const CloudKitSyncEngine('iCloud.com.yourapp.container');
+
+  Future<void> start() async => engine.start(
+        delegate: this,
+        stateSerialization: await loadEngineState(),
+        excludedZoneNames: ['Blobs'],
+      );
+
+  Future<void> bookChanged(String bookId) =>
+      engine.addPendingRecordZoneChanges([
+        CloudKitPendingRecordSave(
+          CloudKitRecordId(zoneName: 'Library', recordName: bookId),
+        ),
+      ]);
+
+  @override
+  Future<void> handleEvent(CloudKitSyncEvent event) async {
+    switch (event) {
+      case CloudKitStateUpdate(:final stateSerialization):
+        // Save it after the changes it covers; pass it to the next start.
+        await saveEngineState(stateSerialization);
+      case CloudKitFetchedRecordZoneChanges():
+        await applyServerChanges(event);
+      case CloudKitSentRecordZoneChanges():
+        // Keep each saved record's systemFields, and resolve failures such
+        // as CKErrorCode.serverRecordChanged.
+        await handleSentChanges(event);
+      default:
+        break;
+    }
+  }
+
+  @override
+  Future<CloudKitRecordZoneChangeBatch?> nextRecordZoneChangeBatch(
+    List<CloudKitPendingRecordZoneChange> pendingChanges,
+  ) async =>
+      CloudKitRecordZoneChangeBatch(
+        recordsToSave: [
+          for (final change in pendingChanges)
+            if (change is CloudKitPendingRecordSave) await recordFor(change.id),
+        ],
+        recordIdsToDelete: [
+          for (final change in pendingChanges)
+            if (change is CloudKitPendingRecordDelete) change.id,
+        ],
+      );
+
+  Future<String?> loadEngineState();
+  Future<void> saveEngineState(String stateSerialization);
+  Future<void> applyServerChanges(CloudKitFetchedRecordZoneChanges changes);
+  Future<void> handleSentChanges(CloudKitSentRecordZoneChanges changes);
+
+  /// Builds the record from local data, with the systemFields of its last
+  /// server copy.
+  Future<CloudKitRecord> recordFor(CloudKitRecordId id);
+}
+```
+
+How the bridge behaves:
+
+- The engine delivers one event at a time and waits for `handleEvent` to
+  finish before the next. If `handleEvent` throws, the engine stops so the
+  unhandled changes are delivered again after the next `start`. Later calls
+  throw `CloudKitSyncException.engineNotRunning` with the reason.
+- `nextRecordZoneChangeBatch` receives up to 250 pending changes. Returning
+  null or an empty batch ends the send; the changes stay pending.
+- Record fields hold `String`, `int`, `double`, `Uint8List`, or lists of those.
+  Files travel as `assets`. A received asset file belongs to CloudKit, so copy
+  it before `handleEvent` returns.
+- The app runs one engine at a time. Starting an engine replaces the running
+  one.
+- Failures throw `CloudKitSyncException`. For `nativeError`, `nativeDomain` and
+  `nativeCode` keep the original CloudKit error.
+
+### Large files in a separate zone
+
+Every record in a zone the engine syncs is downloaded to every device,
+including its assets. For large files that a device should download only when
+the user opens them, such as book PDFs, keep the records in their own zone, pass
+that zone in `excludedZoneNames`, and move each file with `CloudKitAssetStore`:
+
+```dart
+const store = CloudKitAssetStore('iCloud.com.yourapp.container');
+const id = CloudKitRecordId(zoneName: 'Blobs', recordName: 'sha256-of-file');
+
+if (!await store.recordExists(id)) {
+  await store.uploadAsset(
+    id: id,
+    recordType: 'Blob',
+    field: 'data',
+    source: pdf,
+  );
+}
+await store.downloadAsset(
+  id: id,
+  field: 'data',
+  destination: localFile,
+  onProgress: (fraction) => print('${(fraction * 100).round()}%'),
+);
+```
+
+Before releasing, deploy your CloudKit schema from the development environment
+to production in the CloudKit Console.
 ## Troubleshooting / gotchas
 
 - Prefer testing on physical devices. iCloud sync is unreliable in iOS
