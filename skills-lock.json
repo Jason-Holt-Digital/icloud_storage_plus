@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "skills": {
+    "axiom-audit-icloud": {
+      "source": "CharlesWiltgen/Axiom",
+      "ref": "main",
+      "sourceType": "github",
+      "skillPath": "axiom-codex/skills/axiom-audit-icloud/SKILL.md",
+      "computedHash": "ccda012a811be7d335555073e5bda5449fbafc4281e9715700f987dbdbd5797c",
+      "installMode": "copy"
+    },
+    "axiom-data": {
+      "source": "CharlesWiltgen/Axiom",
+      "sourceType": "github",
+      "skillPath": ".claude-plugin/plugins/axiom/skills/axiom-data/SKILL.md",
+      "computedHash": "3de20d892ebfe18a8ad271bd996e91a2abc2b1b551716537fb13553f264c956b",
+      "installMode": "copy"
+    },
+    "swift-concurrency-pro": {
+      "source": "twostraws/Swift-Concurrency-Agent-Skill",
+      "sourceType": "github",
+      "skillPath": "swift-concurrency-pro/SKILL.md",
+      "computedHash": "db6c88d8da1a264188a2ad826a0ed73d227384315b27e47f3bb6b78ca1a3df40",
+      "installMode": "copy"
+    }
+  }
+}

@@ -62,6 +62,10 @@ Before designing iCloud policy, distinguish a local file operation from an
 attempt to manage Apple's sync lifecycle. For uncertain Apple behavior, consult
 [Apple's Foundation/iCloud documentation](https://developer.apple.com/documentation/foundation/icloud).
 Verify unfamiliar APIs against official documentation for the resolved version.
+For Swift or CloudKit work, use the `axiom-data` (cloud sync, CloudKit) and
+`swift-concurrency-pro` skills, use `axiom-audit-icloud` to audit iCloud code,
+and check the change against Swift and CloudKit best practice, including Apple's
+[`sample-cloudkit-sync-engine`](https://github.com/apple/sample-cloudkit-sync-engine).
 
 Complete requested changes through affected local checks and fix failures caused
 by the change without asking for approval at each step. Report unrelated failures
