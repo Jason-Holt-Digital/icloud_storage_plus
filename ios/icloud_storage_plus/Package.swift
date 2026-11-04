@@ -23,6 +23,8 @@ let package = Package(
                 "icloud_storage_plus_foundation/Package.swift",
                 "icloud_storage_plus_foundation/Tests",
                 "icloud_storage_plus_foundation/Placeholder.swift",
+                "icloud_storage_plus_cloudkit/Package.swift",
+                "icloud_storage_plus_cloudkit/Tests",
             ],
             sources: [
                 "icloud_storage_plus/FileWriteHelpers.swift",
@@ -39,6 +41,10 @@ let package = Package(
                 "icloud_storage_plus_foundation/PerPathMutationLane.swift",
                 "icloud_storage_plus_foundation/UbiquitousItemMaterializer.swift",
                 "icloud_storage_plus_foundation/UbiquitousItemMover.swift",
+                "icloud_storage_plus_cloudkit/CloudKitAssetTransfers.swift",
+                "icloud_storage_plus_cloudkit/CloudKitRecordCodec.swift",
+                "icloud_storage_plus_cloudkit/CloudKitSyncBridge.swift",
+                "icloud_storage_plus_cloudkit/CloudKitSyncChannel.swift",
             ],
             resources: [
                 .process("icloud_storage_plus/PrivacyInfo.xcprivacy"),

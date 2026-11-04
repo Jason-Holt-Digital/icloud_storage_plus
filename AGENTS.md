@@ -4,21 +4,24 @@ This is a Flutter plugin for local file operations in an Apple-managed iCloud
 Drive ubiquity container on iOS and macOS. Document storage and syncing
 through iCloud Drive is the core and comes first. The plugin may also cover
 other features iCloud supports, such as the key-value store
-(`NSUbiquitousKeyValueStore`). App UI, theming, routing, and telemetry
-policy are out of scope except when editing the example app.
+(`NSUbiquitousKeyValueStore`) and the separate CloudKit sync bridge described
+below. App UI, theming, routing, and telemetry policy are out of scope except
+when editing the example app.
 
 ## Ownership
 
-The plugin owns container resolution, public argument and path validation,
-local file operations, and the Dart/Flutter platform boundary. Resolve the
-container off the main thread and prevent access outside it. Coordinate document
-operations with Foundation APIs such as `NSFileCoordinator`, `UIDocument`, or
-`NSDocument` where appropriate. Update both iOS and macOS for native features.
+For document storage, the plugin owns container resolution, public argument and
+path validation, local file operations, and the Dart/Flutter platform boundary.
+Resolve the container off the main thread and prevent access outside it.
+Coordinate document operations with Foundation APIs such as
+`NSFileCoordinator`, `UIDocument`, or `NSDocument` where appropriate. Update
+both iOS and macOS for native features.
 
 Apple owns sync scheduling, retries, materialization, upload/download state,
 metadata freshness, eviction, and document conflicts. Do not introduce a sync
 engine, readiness engine, retry scheduler, freshness policy, conflict manager,
-stale-write guard, compare-before-write protocol, or telemetry pipeline.
+stale-write guard, compare-before-write protocol, or telemetry pipeline into
+document storage.
 
 `startDownloadingUbiquitousItem(at:)` requests local materialization. It does not
 promise that an item becomes `.current` within a plugin-defined deadline.
@@ -32,6 +35,33 @@ coordinated operation without plugin-owned `.current` waits.
 Check iCloud availability with `icloudAvailable()` before operations. Use
 `FileManager.fileExists(atPath:)` on the container URL for existence checks,
 not `NSMetadataQuery`.
+
+## CloudKit sync bridge
+
+The CloudKit sync bridge is a separate, thin module that wraps `CKSyncEngine`
+for the CloudKit private database. It lives in `lib/cloudkit_sync.dart`,
+`lib/src/cloudkit_sync/`, and `Sources/icloud_storage_plus_cloudkit/` on each
+platform, and it has its own method channel. It shares no types, state, queues,
+or errors with document storage. Neither side imports the other; the only
+shared point is a marked registration call in the plugin entry point. The
+bridge uses CloudKit only and never reads or writes the ubiquity container.
+
+The bridge owns the CloudKit boundary. It creates the engine from the app's
+saved state and forwards each engine event that carries data or results to
+Dart one at a time, waiting until Dart has handled it. The will/did fetch and
+send lifecycle events are not forwarded. It asks Dart for the records in each batch the engine
+sends, and it converts records, system fields, and assets across the channel.
+It also uploads and downloads single assets on demand, outside the engine.
+Apple's `CKSyncEngine` owns scheduling, retries, paging, push, and account
+monitoring. The app owns every sync decision: what to send, how to resolve
+conflicts, how to apply records, how to handle zones, and how to react to
+account changes. Do not add sync policy, conflict handling, retry loops, or
+persistence to the bridge.
+
+The bridge requires iOS 17 or macOS 14; the package minimums do not change. The
+bridge is Apple-only and talks to its method channel directly, without a
+platform interface. Its channel contract follows `CKSyncEngine`'s events;
+extend it only when a `CKSyncEngine` API needs it.
 
 ## Errors and public contracts
 
@@ -95,9 +125,12 @@ Generate code only when changed generated inputs require it.
 
 Tests should cover argument validation, path handling, method-channel behavior,
 and local file-operation decisions. Do not invent native payload-emission tests,
-channel payload contracts, or sync simulations for Apple-owned behavior. Do not
-require top-level `swift build` unless the changed code belongs to a Swift package
-that supports it. Do not require post-release Sentry validation for this plugin.
+channel payload contracts, or sync simulations for Apple-owned behavior.
+CloudKit sync bridge tests cover channel encoding and decoding, argument
+validation, and one-at-a-time event delivery; they do not simulate CloudKit
+sync. Do not require top-level `swift build` unless the changed code belongs to
+a Swift package that supports it. Do not require post-release Sentry validation
+for this plugin.
 
 Preserve unrelated files and local changes. Keep Dart API and platform ownership
 separate; platform implementations extend the platform interface and verify its
