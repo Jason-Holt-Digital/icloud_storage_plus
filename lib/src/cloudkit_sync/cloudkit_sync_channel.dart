@@ -10,7 +10,8 @@ import 'package:icloud_storage_plus/src/cloudkit_sync/cloudkit_sync_exception.da
 abstract final class CloudKitSyncChannel {
   static const _channel = MethodChannel('icloud_storage_plus/cloudkit_sync');
 
-  static CloudKitSyncDelegate? _delegate;
+  // The native side calls the delegate only after start attached one.
+  static late CloudKitSyncDelegate _delegate;
   static final _progressListeners = <int, void Function(double)>{};
   static int _nextTransferId = 0;
 
@@ -51,8 +52,7 @@ abstract final class CloudKitSyncChannel {
       );
       return null;
     }
-    // The native side calls the delegate only after start attached one.
-    final delegate = _delegate!;
+    final delegate = _delegate;
     try {
       switch (call.method) {
         case 'handleEvent':
