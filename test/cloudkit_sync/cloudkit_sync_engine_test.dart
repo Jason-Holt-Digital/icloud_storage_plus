@@ -221,6 +221,25 @@ void main() {
     );
   });
 
+  test('a failed start leaves events with the running delegate', () async {
+    mockNative((call) async {
+      throw PlatformException(code: 'invalidStateSerialization');
+    });
+    final next = _Delegate();
+    await expectLater(
+      engine.start(delegate: next, stateSerialization: 'not json'),
+      throwsA(isA<CloudKitSyncException>()),
+    );
+
+    await callFromNative('handleEvent', {
+      'type': 'stateUpdate',
+      'stateSerialization': '{}',
+    });
+
+    expect(next.events, isEmpty);
+    expect(delegate.events, hasLength(1));
+  });
+
   test('starting again sends events to the new delegate only', () async {
     final next = _Delegate();
     await engine.start(delegate: next, stateSerialization: null);

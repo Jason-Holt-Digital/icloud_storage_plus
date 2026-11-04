@@ -13,6 +13,10 @@ abstract interface class CloudKitSyncDelegate {
   /// event. If it completes with an error, the engine stops so that the
   /// unhandled changes are delivered again after the next start; calls then
   /// throw [CloudKitSyncException.engineNotRunning].
+  ///
+  /// Do not await [CloudKitSyncEngine.fetchChanges] or
+  /// [CloudKitSyncEngine.sendChanges] here: they complete only after their
+  /// events are handled, so awaiting them from an event never completes.
   Future<void> handleEvent(CloudKitSyncEvent event);
 
   /// Builds the records for the next request the engine sends.
@@ -52,8 +56,7 @@ final class CloudKitSyncEngine {
     required String? stateSerialization,
     List<String> excludedZoneNames = const [],
   }) async {
-    CloudKitSyncChannel.attach(delegate);
-    await CloudKitSyncChannel.invoke<void>('start', {
+    await CloudKitSyncChannel.start(delegate, {
       'containerId': containerId,
       'stateSerialization': stateSerialization,
       'excludedZoneNames': excludedZoneNames,

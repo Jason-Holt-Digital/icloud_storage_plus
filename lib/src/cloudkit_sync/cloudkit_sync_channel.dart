@@ -10,15 +10,28 @@ import 'package:icloud_storage_plus/src/cloudkit_sync/cloudkit_sync_exception.da
 abstract final class CloudKitSyncChannel {
   static const _channel = MethodChannel('icloud_storage_plus/cloudkit_sync');
 
-  // The native side calls the delegate only after start attached one.
-  static late CloudKitSyncDelegate _delegate;
+  static CloudKitSyncDelegate? _delegate;
   static final _progressListeners = <int, void Function(double)>{};
   static int _nextTransferId = 0;
 
-  /// Makes [delegate] the receiver of engine calls.
-  static void attach(CloudKitSyncDelegate delegate) {
+  /// Starts the native engine with [arguments] and makes [delegate] the
+  /// receiver of its calls.
+  static Future<void> start(
+    CloudKitSyncDelegate delegate,
+    Map<String, Object?> arguments,
+  ) async {
+    // The new engine can call Dart before the start reply arrives, so the
+    // delegate is attached first. A failed start leaves the previous engine
+    // running, and its calls must keep reaching the previous delegate.
+    final previous = _delegate;
     _delegate = delegate;
     _channel.setMethodCallHandler(_handle);
+    try {
+      await invoke<void>('start', arguments);
+    } on CloudKitSyncException {
+      _delegate = previous;
+      rethrow;
+    }
   }
 
   /// Registers [onProgress] for a download and returns its transfer ID.
@@ -52,7 +65,8 @@ abstract final class CloudKitSyncChannel {
       );
       return null;
     }
-    final delegate = _delegate;
+    // The native side calls the delegate only after a start attached one.
+    final delegate = _delegate!;
     try {
       switch (call.method) {
         case 'handleEvent':
