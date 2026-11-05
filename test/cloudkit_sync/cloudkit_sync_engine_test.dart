@@ -82,6 +82,21 @@ void main() {
     });
   });
 
+  test('accountStatus asks for its own container and reads each status',
+      () async {
+    late CloudKitAccountStatus reply;
+    final calls = mockNative((call) async => reply.name);
+    const other = CloudKitSyncEngine('iCloud.com.example.other');
+
+    for (final status in CloudKitAccountStatus.values) {
+      reply = status;
+      expect(await other.accountStatus(), status);
+    }
+
+    expect(calls.map((call) => call.method).toSet(), {'accountStatus'});
+    expect(calls.first.arguments, {'containerId': 'iCloud.com.example.other'});
+  });
+
   test('native failures become CloudKitSyncException', () async {
     mockNative((call) async {
       throw PlatformException(

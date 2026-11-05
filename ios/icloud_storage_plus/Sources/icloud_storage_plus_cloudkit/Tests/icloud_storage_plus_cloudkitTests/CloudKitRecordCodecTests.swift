@@ -39,6 +39,16 @@ final class CloudKitRecordCodecTests: XCTestCase {
     XCTAssertEqual((decoded["cover"] as? CKAsset)?.fileURL, assetURL)
   }
 
+  func testAccountStatusNamesMatchTheDartEnum() {
+    XCTAssertEqual(CloudKitRecordCodec.encode(CKAccountStatus.available), "available")
+    XCTAssertEqual(CloudKitRecordCodec.encode(CKAccountStatus.noAccount), "noAccount")
+    XCTAssertEqual(CloudKitRecordCodec.encode(CKAccountStatus.restricted), "restricted")
+    XCTAssertEqual(
+      CloudKitRecordCodec.encode(CKAccountStatus.temporarilyUnavailable), "temporarilyUnavailable"
+    )
+    XCTAssertEqual(CloudKitRecordCodec.encode(CKAccountStatus.couldNotDetermine), "couldNotDetermine")
+  }
+
   func testDecodingFromSystemFieldsSetsOnlyTheGivenFields() throws {
     let record = CKRecord(recordType: "Book", recordID: CKRecord.ID(recordName: "book-1", zoneID: zoneID))
     record["title"] = "Old title"
