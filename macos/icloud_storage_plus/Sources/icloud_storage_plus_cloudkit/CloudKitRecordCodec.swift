@@ -267,6 +267,19 @@ enum CloudKitRecordCodec {
     }
   }
 
+  /// Names the account status for Dart. A status added in a later OS reads as
+  /// `couldNotDetermine`.
+  static func encode(_ status: CKAccountStatus) -> String {
+    switch status {
+    case .available: return "available"
+    case .noAccount: return "noAccount"
+    case .restricted: return "restricted"
+    case .temporarilyUnavailable: return "temporarilyUnavailable"
+    case .couldNotDetermine: return "couldNotDetermine"
+    @unknown default: return "couldNotDetermine"
+    }
+  }
+
   static func encode(_ error: CKError) throws -> [String: Any] {
     var map: [String: Any] = ["code": error.errorCode, "message": error.localizedDescription]
     if let serverRecord = error.serverRecord {

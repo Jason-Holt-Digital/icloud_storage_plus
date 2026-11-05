@@ -101,6 +101,11 @@ final class CloudKitSyncChannel: NSObject {
       try await bridge.fetchChanges()
     case "sendChanges":
       try await bridge.sendChanges()
+    case "accountStatus":
+      let container = CKContainer(
+        identifier: try CloudKitRecordCodec.string(arguments["containerId"], named: "containerId")
+      )
+      return CloudKitRecordCodec.encode(try await container.accountStatus())
     case "recordExists":
       return try await CloudKitAssetTransfers.recordExists(
         in: database(arguments),

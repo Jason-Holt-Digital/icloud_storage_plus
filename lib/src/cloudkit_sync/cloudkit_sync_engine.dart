@@ -4,6 +4,26 @@ import 'package:icloud_storage_plus/src/cloudkit_sync/cloudkit_sync_channel.dart
 import 'package:icloud_storage_plus/src/cloudkit_sync/cloudkit_sync_events.dart';
 import 'package:icloud_storage_plus/src/cloudkit_sync/cloudkit_sync_exception.dart';
 
+/// The iCloud account status of a container, mirroring `CKAccountStatus`.
+enum CloudKitAccountStatus {
+  /// The device is signed in to an iCloud account the app can use.
+  available,
+
+  /// The device is not signed in to iCloud.
+  noAccount,
+
+  /// Parental controls or device management deny access to the account.
+  restricted,
+
+  /// The account is signed in but cannot be used yet, for example until the
+  /// user re-enters their password in Settings.
+  temporarilyUnavailable,
+
+  /// CloudKit could not determine the status. Also used for a status added
+  /// in a later OS version.
+  couldNotDetermine,
+}
+
 /// Receives a [CloudKitSyncEngine]'s events and supplies the records it
 /// sends.
 abstract interface class CloudKitSyncDelegate {
@@ -72,6 +92,20 @@ final class CloudKitSyncEngine {
       'excludedZoneNames': excludedZoneNames,
     });
   }
+
+  /// The current iCloud account status of [containerId], from
+  /// `CKContainer.accountStatus()`.
+  ///
+  /// Unlike the other methods, this asks CloudKit about this instance's
+  /// container and works whether or not an engine is running. Listen for
+  /// [CloudKitAccountChange] events to learn when the account changes.
+  Future<CloudKitAccountStatus> accountStatus() async =>
+      CloudKitAccountStatus.values.byName(
+        (await CloudKitSyncChannel.invoke<String>(
+          'accountStatus',
+          {'containerId': containerId},
+        ))!,
+      );
 
   /// Stops the engine and cancels its operations.
   Future<void> stop() => CloudKitSyncChannel.invoke<void>('stop', {});

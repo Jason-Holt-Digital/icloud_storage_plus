@@ -764,6 +764,10 @@ How the bridge behaves:
   file access.
 - The app runs one engine at a time. Starting an engine replaces the running
   one.
+- `accountStatus()` returns the container's `CKContainer.accountStatus()` as
+  a `CloudKitAccountStatus`, whether or not the engine is running. Use it to
+  tell a signed-out device from a restricted or temporarily unavailable
+  account; `CloudKitAccountChange` events report later changes.
 - Failures throw `CloudKitSyncException`. For `nativeError`, `nativeDomain` and
   `nativeCode` keep the original CloudKit error. `CloudKitErrorCode` names the
   codes apps usually act on, including `quotaExceeded`; compare other codes
