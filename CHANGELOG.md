@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.4.0](https://github.com/Jason-Holt-Digital/icloud_storage_plus/compare/4.3.0...4.4.0) (2026-11-16)
+
+
+### Features
+
+* add CloudKitAssetStore.deleteRecord ([#70](https://github.com/Jason-Holt-Digital/icloud_storage_plus/issues/70)) ([b689b03](https://github.com/Jason-Holt-Digital/icloud_storage_plus/commit/b689b033c2e09e9530e9a6d5dea4172fa4ee1836))
+
 ## [4.3.0](https://github.com/Jason-Holt-Digital/icloud_storage_plus/compare/4.2.0...4.3.0) (2026-11-05)
 
 
