@@ -802,6 +802,11 @@ await store.downloadAsset(
 );
 ```
 
+An excluded zone stays marked as needing a fetch, and the engine does not send
+pending changes for it. Delete a file's record with `store.deleteRecord(id)`
+instead of through the engine. A record that is
+already gone counts as deleted.
+
 Before releasing, deploy your CloudKit schema from the development environment
 to production in the CloudKit Console.
 ## Troubleshooting / gotchas

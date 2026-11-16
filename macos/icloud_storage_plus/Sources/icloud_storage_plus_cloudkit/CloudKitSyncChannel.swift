@@ -119,6 +119,11 @@ final class CloudKitSyncChannel: NSObject {
         field: CloudKitRecordCodec.string(arguments["field"], named: "field"),
         source: URL(fileURLWithPath: CloudKitRecordCodec.string(arguments["sourcePath"], named: "sourcePath"))
       )
+    case "deleteRecord":
+      try await CloudKitAssetTransfers.deleteRecord(
+        in: database(arguments),
+        id: CloudKitRecordCodec.decodeRecordID(arguments["id"])
+      )
     case "downloadAsset":
       let transferId = arguments["transferId"] as? Int
       try await CloudKitAssetTransfers.download(

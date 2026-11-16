@@ -43,6 +43,35 @@ void main() {
     });
   });
 
+  test('deleteRecord passes the record', () async {
+    final calls = mockNative();
+
+    await store.deleteRecord(id);
+
+    expect(calls.single.method, 'deleteRecord');
+    expect(calls.single.arguments, {
+      'containerId': 'iCloud.com.example.app',
+      'id': idMap,
+    });
+  });
+
+  test('a failed delete keeps its native code', () async {
+    mockNative((_) async {
+      throw PlatformException(code: 'nativeError', message: 'Offline');
+    });
+
+    await expectLater(
+      store.deleteRecord(id),
+      throwsA(
+        isA<CloudKitSyncException>().having(
+          (e) => e.code,
+          'code',
+          CloudKitSyncException.nativeError,
+        ),
+      ),
+    );
+  });
+
   test(
       'download progress reaches only its own listener while the download '
       'runs', () async {
