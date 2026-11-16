@@ -42,6 +42,14 @@ final class CloudKitAssetStore {
         'sourcePath': source.path,
       });
 
+  /// Deletes the record [id]. A record or zone that does not exist counts as
+  /// deleted.
+  Future<void> deleteRecord(CloudKitRecordId id) =>
+      CloudKitSyncChannel.invoke<void>('deleteRecord', {
+        'containerId': containerId,
+        'id': CloudKitChannelCodec.encodeRecordId(id),
+      });
+
   /// Writes the asset in [field] of the record [id] to [destination],
   /// replacing any file there. A [destination] that is a directory fails with
   /// [CloudKitSyncException.invalidArgument]. [onProgress] receives the

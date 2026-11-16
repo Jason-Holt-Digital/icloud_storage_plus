@@ -44,6 +44,17 @@ enum CloudKitAssetTransfers {
     _ = try records.saveResults[id]?.get()
   }
 
+  /// Deletes the record `id`. A record or zone that does not exist counts as
+  /// deleted.
+  static func deleteRecord(in database: CKDatabase, id: CKRecord.ID) async throws {
+    do {
+      let records = try await database.modifyRecords(saving: [], deleting: [id], atomically: false)
+      _ = try records.deleteResults[id]?.get()
+    } catch let error as CKError where error.code == .unknownItem || error.code == .zoneNotFound {
+      return
+    }
+  }
+
   /// Copies the asset in `field` of the record `id` to `destination`,
   /// replacing any file there.
   static func download(
