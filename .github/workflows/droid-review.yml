@@ -1,0 +1,94 @@
+# One deep review, with a security check, when a PR is opened, reopened, or
+# marked ready. Comment `@droid review` for another one (droid.yml).
+name: Droid Auto Review
+
+on:
+  pull_request:
+    types: [opened, ready_for_review, reopened]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  droid-review:
+    if: github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      id-token: write
+      actions: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Run Droid Auto Review
+        id: review
+        continue-on-error: true
+        uses: Factory-AI/droid-action@260eac443df653198ed70e9ea9d32980cfabde23 # v13
+        with:
+          factory_api_key: ${{ secrets.FACTORY_API_KEY }}
+          automatic_review: true
+          automatic_security_review: true
+          allowed_bots: factory-droid
+          use_sticky_comment: true
+
+      # droid-action reports a Factory usage limit only in its status comment,
+      # so the fallback runs only when this run's comment says so.
+      - name: Check for a Factory usage limit
+        id: usage
+        if: steps.review.outcome == 'failure'
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        with:
+          script: |
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              ...context.repo,
+              issue_number: context.issue.number,
+              per_page: 100,
+            });
+            const runLink = `/actions/runs/${context.runId})`;
+            const limited = comments.some((comment) =>
+              comment.body?.includes(runLink) &&
+              comment.body.includes('a usage limit was reached'));
+            core.setOutput('limited', String(limited));
+            if (!limited) core.setFailed('Droid review failed for a reason other than a usage limit.');
+
+      # droid-action's `settings` input writes ~/.factory/droid/settings.json,
+      # but Droid reads custom models from ~/.factory/settings.json.
+      - name: Register Opus 5.5 on the Anthropic API key
+        if: steps.usage.outputs.limited == 'true'
+        run: |
+          mkdir -p ~/.factory
+          settings=~/.factory/settings.json
+          [ -s "$settings" ] || echo '{}' > "$settings"
+          jq '.customModels = [{
+            "id": "custom:anthropic-api:opus-5-5",
+            "displayName": "Anthropic API: Opus 5.5",
+            "model": "claude-opus-5-5",
+            "baseModelId": "claude-opus-5-5",
+            "baseUrl": "https://api.anthropic.com",
+            "apiKey": "${ANTHROPIC_API_KEY}",
+            "provider": "anthropic",
+            "maxOutputTokens": 64000
+          }]' "$settings" > "$settings.tmp"
+          mv "$settings.tmp" "$settings"
+
+      - name: Rerun the review on Opus 5.5
+        if: steps.usage.outputs.limited == 'true'
+        uses: Factory-AI/droid-action@260eac443df653198ed70e9ea9d32980cfabde23 # v13
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        with:
+          factory_api_key: ${{ secrets.FACTORY_API_KEY }}
+          automatic_review: true
+          automatic_security_review: true
+          allowed_bots: factory-droid
+          use_sticky_comment: true
+          review_model: custom:anthropic-api:opus-5-5
+          security_model: custom:anthropic-api:opus-5-5
