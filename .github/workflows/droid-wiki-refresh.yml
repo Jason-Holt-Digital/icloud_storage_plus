@@ -1,6 +1,7 @@
 name: Droid Wiki Refresh
 
 # Factory's /install-wiki workflow, run weekly instead of on every push.
+# Weeks with no code changes since the last generated wiki are skipped.
 on:
   schedule:
     - cron: '0 10 * * 1'
@@ -23,10 +24,10 @@ env:
 
 jobs:
   wiki-refresh:
+    # Manual runs on other branches would publish unmerged documentation.
+    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
     runs-on: ubuntu-latest
     timeout-minutes: 90
-    outputs:
-      generated: ${{ steps.changes.outputs.changed }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
@@ -35,25 +36,33 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Skip when main has not changed this week
-        id: changes
+      - name: Restore the previous wiki from the rolling branch
+        # fetch-depth 0 already fetched every branch, so this needs no
+        # credentials. The default branch's droid-wiki/ wins when it has wiki
+        # commits the rolling branch lacks, such as page edits merged later.
         run: |
-          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ] || [ -n "$(git log -1 --since='7 days ago' --format=%H -- . ':!droid-wiki')" ]; then
-            echo "changed=true" >> "$GITHUB_OUTPUT"
+          rolling="origin/$WIKI_BRANCH"
+          if ! git rev-parse -q --verify "$rolling" >/dev/null; then
+            echo "No $WIKI_BRANCH branch; starting from droid-wiki/ on the default branch."
+          elif ! git cat-file -e "$rolling:droid-wiki" 2>/dev/null; then
+            echo "$WIKI_BRANCH has no droid-wiki/; starting from droid-wiki/ on the default branch."
+          elif [ -n "$(git log -1 --format=%H "$rolling..HEAD" -- droid-wiki)" ]; then
+            echo "The default branch has wiki changes that $WIKI_BRANCH lacks; starting from droid-wiki/ on the default branch."
           else
-            echo "No code changes on ${GITHUB_REF_NAME} in the last 7 days; skipping the wiki refresh."
+            git checkout --no-overlay "$rolling" -- droid-wiki
+            echo "Restored droid-wiki/ from $WIKI_BRANCH."
           fi
 
-      - name: Restore the previous wiki from the rolling branch
-        # Copies only droid-wiki/ into the working tree, without switching
-        # branches. When the branch does not exist, the droid-wiki/ already
-        # on the default branch is the previous wiki.
-        if: steps.changes.outputs.changed == 'true'
+      - name: Skip when no code changed since the last wiki
+        id: changes
         run: |
-          if git fetch origin "$WIKI_BRANCH" 2>/dev/null && git checkout FETCH_HEAD -- droid-wiki; then
-            echo "Restored droid-wiki/ from $WIKI_BRANCH."
+          base=$(jq -r '.commitHash // empty' droid-wiki/.wiki-meta.json 2>/dev/null || true)
+          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ] ||
+            ! git merge-base --is-ancestor "$base" HEAD 2>/dev/null ||
+            [ -n "$(git log -1 --format=%H "$base..HEAD" -- . ':!droid-wiki')" ]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
           else
-            echo "No $WIKI_BRANCH branch; starting from droid-wiki/ on the default branch."
+            echo "No code changes since the wiki was generated at $base; skipping the wiki refresh."
           fi
 
       - name: Install Factory Droid
@@ -66,9 +75,10 @@ jobs:
         env:
           FACTORY_API_KEY: ${{ secrets.FACTORY_API_KEY }}
 
+      # Runs even when generation was skipped, so a wiki pushed to the rolling
+      # branch by a run whose pull request step failed still gets its PR.
       - name: Hand the wiki to the publish job
-        if: steps.changes.outputs.changed == 'true'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: droid-wiki
           # The pages and their metadata only: the video overview and the
@@ -84,7 +94,6 @@ jobs:
 
   wiki-publish:
     needs: wiki-refresh
-    if: needs.wiki-refresh.outputs.generated == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -92,8 +101,12 @@ jobs:
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
+      # Start from an empty folder so pages that /wiki removed stay removed.
+      - name: Remove the default branch's wiki pages
+        run: rm -rf droid-wiki
+
       - name: Pick up the generated wiki
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: droid-wiki
           path: droid-wiki
@@ -105,9 +118,10 @@ jobs:
         continue-on-error: true
         uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
         with:
-          # Pull requests opened with GITHUB_TOKEN do not trigger other
-          # workflows, so CI and Droid review do not run on the wiki PR.
-          token: ${{ secrets.FACTORY_WIKI_PR_TOKEN || github.token }}
+          # Workflows on a pull request opened with GITHUB_TOKEN wait for a
+          # maintainer to approve them, so the wiki PR uses no CI or review
+          # until someone chooses to run it.
+          token: ${{ github.token }}
           branch: ${{ env.WIKI_BRANCH }}
           base: ${{ github.event.repository.default_branch }}
           add-paths: |
@@ -116,7 +130,7 @@ jobs:
             :!droid-wiki/images/**
           commit-message: 'docs: refresh wiki'
           title: 'docs: refresh wiki'
-          body: 'Generated by Droid Wiki Refresh. Review and merge to update droid-wiki/ on the default branch; the next refresh updates this pull request in place.'
+          body: 'Generated by Droid Wiki Refresh. Checks on this pull request wait for approval: open a waiting run and select "Approve workflows to run" if required checks must pass before merge. Merge to update droid-wiki/ on the default branch; the next refresh updates this pull request in place.'
           labels: droid-wiki
 
       - name: Report when the wiki could not be pushed
