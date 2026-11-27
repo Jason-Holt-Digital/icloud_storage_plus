@@ -649,16 +649,18 @@ error context when the platform provides it. `ICloudCancelledException` reports
 native operation cancellation; `ICloudInitializationException` reports a native
 plugin or event-channel initialization failure.
 
-`nativeErrorChain` lists the native error and each error nested under it
+`nativeErrorChain` lists the native error and the errors nested under it
 (`NSUnderlyingErrorKey`), outermost first, as `ICloudNativeError` values with a
-domain and code. Many different failures share one top-level code, so the chain
-is what tells them apart. A Foundation read error on a directory, for example,
-is `NSCocoaErrorDomain 256` followed by `NSPOSIXErrorDomain 21`. Errors the
-plugin builds itself reuse Foundation codes too; for those, `pluginReason`
-names why the plugin built it, such as `invalidUTF8Text` for a text read of
-bytes that are not UTF-8. The chain holds no descriptions, file names, or
-paths, so you can log or report it as is. `nativeDescription` and `underlying`
-can contain paths.
+domain and code. It stops after eight errors, so a deeper cause can be missing.
+Many different failures share one top-level code, so the chain is what tells
+them apart. A Foundation read error on a directory, for example, is
+`NSCocoaErrorDomain 256` followed by `NSPOSIXErrorDomain 21`. Some errors the
+plugin builds itself reuse Foundation's `NSCocoaErrorDomain` codes; those carry
+a `pluginReason`, such as `invalidUTF8Text` for a text read of bytes that are
+not UTF-8. Plugin errors in the plugin's own `ICloudStoragePlusErrorDomain`
+need no reason, because their domain already names them. The chain holds no
+descriptions, file names, or paths, so you can log or report it as is.
+`nativeDescription` and `underlying` can contain paths.
 
 `ICloudCoordinationException` is reserved for structured coordination failures.
 Current iOS and macOS native implementations still classify some lower-level

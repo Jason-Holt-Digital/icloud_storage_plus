@@ -355,14 +355,7 @@ final class ICloudInPlaceDocument: NSDocument {
             textContents = ""
             return
         }
-        guard let text = String(data: data, encoding: .utf8) else {
-            throw PluginError.make(
-                .invalidUTF8Text,
-                code: NSFileReadUnknownError,
-                description: "Unsupported text encoding"
-            )
-        }
-        textContents = text
+        textContents = try decodeUTF8Text(data)
     }
 }
 

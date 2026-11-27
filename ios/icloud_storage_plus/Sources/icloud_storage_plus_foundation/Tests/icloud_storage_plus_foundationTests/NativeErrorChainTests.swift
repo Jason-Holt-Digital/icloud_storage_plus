@@ -149,6 +149,42 @@ final class NativeErrorChainTests: XCTestCase {
         ])
     }
 
+    func testPluginErrorDescribesItselfLikeThePlainErrorItReplaced() {
+        let plain = NSError(
+            domain: NSCocoaErrorDomain,
+            code: NSFileReadUnknownError,
+            userInfo: [NSLocalizedDescriptionKey: "Unsupported text encoding"]
+        )
+        let tagged = PluginError.make(
+            .invalidUTF8Text,
+            code: NSFileReadUnknownError,
+            description: "Unsupported text encoding"
+        )
+
+        XCTAssertEqual(String(describing: tagged), String(describing: plain))
+        XCTAssertEqual(tagged.userInfo.count, plain.userInfo.count)
+    }
+
+    func testPluginErrorKeepsItsReasonThroughSecureCoding() throws {
+        let tagged = PluginError.make(
+            .documentOpenFailed,
+            code: NSFileReadUnknownError,
+            description: "Failed to open document"
+        )
+        let archived = try NSKeyedArchiver.archivedData(
+            withRootObject: tagged,
+            requiringSecureCoding: true
+        )
+        let restored = try XCTUnwrap(
+            NSKeyedUnarchiver.unarchivedObject(
+                ofClasses: [PluginError.self, NSDictionary.self, NSString.self],
+                from: archived
+            ) as? PluginError
+        )
+
+        XCTAssertEqual(links(restored), ["NSCocoaErrorDomain 256 documentOpenFailed"])
+    }
+
     func testChainHoldsNoDescriptionsOrPaths() async throws {
         let folder = directory.appendingPathComponent("Secret Journal.json")
         try FileManager.default.createDirectory(
@@ -176,6 +212,6 @@ final class NativeErrorChainTests: XCTestCase {
             )
         }
 
-        XCTAssertEqual(nativeErrorChain(chainError).count, 8)
+        XCTAssertEqual(nativeErrorChain(chainError).count, nativeErrorChainMaxDepth)
     }
 }

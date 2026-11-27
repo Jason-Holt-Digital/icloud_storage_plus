@@ -27,11 +27,12 @@ class ICloudNativeError extends Equatable {
   /// Native error code.
   final int code;
 
-  /// Why the plugin built this error itself, such as `invalidUTF8Text`.
+  /// Why the plugin built this error, such as `invalidUTF8Text`, for plugin
+  /// errors that reuse Foundation's `NSCocoaErrorDomain` codes.
   ///
-  /// Null when the error came from Foundation or another system framework.
-  /// Plugin-built errors reuse Foundation domains and codes, so this is the
-  /// only way to tell them apart.
+  /// Null for errors from Foundation or another system framework, and for
+  /// plugin errors in the plugin's own error domain, which the domain already
+  /// names.
   final String? pluginReason;
 
   @override
@@ -102,10 +103,11 @@ class ICloudOperationException implements Exception {
   /// Underlying native error payload, when present.
   final Object? underlying;
 
-  /// The native error and each error nested under it, outermost first.
+  /// The native error and the errors nested under it, outermost first.
   ///
-  /// Empty when the failure did not come from a native error. Holds only
-  /// domains, codes, and plugin reasons, never descriptions or paths.
+  /// Holds at most eight errors, so a deeper cause can be missing. Empty when
+  /// the failure did not come from a native error. Holds only domains, codes,
+  /// and plugin reasons, never descriptions or paths.
   final List<ICloudNativeError> nativeErrorChain;
 
   @override

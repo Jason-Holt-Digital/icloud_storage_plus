@@ -144,15 +144,19 @@ int? _readInt(Map<Object?, Object?> payload, String key) {
 
 List<ICloudNativeError> _readNativeErrorChain(Object? value) {
   if (value is! List) return const [];
-  return [
-    for (final entry in value)
-      if (entry is Map && entry['domain'] is String && entry['code'] is int)
-        ICloudNativeError(
-          domain: entry['domain'] as String,
-          code: entry['code'] as int,
-          pluginReason: entry['pluginReason'] is String
-              ? entry['pluginReason'] as String
-              : null,
-        ),
-  ];
+  final chain = <ICloudNativeError>[];
+  for (final entry in value) {
+    if (entry is! Map) continue;
+    final domain = _readString(entry, 'domain');
+    final code = _readInt(entry, 'code');
+    if (domain == null || code == null) continue;
+    chain.add(
+      ICloudNativeError(
+        domain: domain,
+        code: code,
+        pluginReason: _readString(entry, 'pluginReason'),
+      ),
+    );
+  }
+  return chain;
 }
