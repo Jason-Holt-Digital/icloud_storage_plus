@@ -51,13 +51,10 @@ class ICloudDocument: NSDocument {
     func startPassiveChangePresentation() throws {
         guard let fileURL,
               let observation = changeObservation else {
-            throw NSError(
-                domain: NSCocoaErrorDomain,
+            throw PluginError.make(
+                .observationWithoutFileURL,
                 code: NSFileReadUnknownError,
-                userInfo: [
-                    NSLocalizedDescriptionKey:
-                        "Cannot start document observation without a file URL.",
-                ]
+                description: "Cannot start document observation without a file URL."
             )
         }
 
@@ -121,13 +118,10 @@ class ICloudDocument: NSDocument {
             atPath: url.path
         )
         guard let modificationDate = attributes[.modificationDate] as? Date else {
-            throw NSError(
-                domain: NSCocoaErrorDomain,
+            throw PluginError.make(
+                .missingModificationDate,
                 code: NSFileReadUnknownError,
-                userInfo: [
-                    NSLocalizedDescriptionKey:
-                        "The presented item has no content modification date.",
-                ]
+                description: "The presented item has no content modification date."
             )
         }
         return modificationDate
@@ -142,10 +136,10 @@ class ICloudDocument: NSDocument {
 
     override func read(from url: URL, ofType typeName: String) throws {
         guard let destinationURL = destinationURL else {
-            throw NSError(
-                domain: NSCocoaErrorDomain,
+            throw PluginError.make(
+                .missingDestinationURL,
                 code: NSFileReadUnknownError,
-                userInfo: [NSLocalizedDescriptionKey: "Missing destination URL"]
+                description: "Missing destination URL"
             )
         }
         do {
@@ -163,10 +157,10 @@ class ICloudDocument: NSDocument {
         originalContentsURL: URL?
     ) throws {
         guard let sourceURL = sourceURL else {
-            throw NSError(
-                domain: NSCocoaErrorDomain,
+            throw PluginError.make(
+                .missingSourceURL,
                 code: NSFileWriteUnknownError,
-                userInfo: [NSLocalizedDescriptionKey: "Missing source URL"]
+                description: "Missing source URL"
             )
         }
         do {
@@ -178,18 +172,18 @@ class ICloudDocument: NSDocument {
     }
 
     override func data(ofType typeName: String) throws -> Data {
-        throw NSError(
-            domain: NSCocoaErrorDomain,
+        throw PluginError.make(
+            .dataTierUnsupported,
             code: NSFileWriteUnknownError,
-            userInfo: [NSLocalizedDescriptionKey: "Data tier is unsupported"]
+            description: "Data tier is unsupported"
         )
     }
 
     override func read(from data: Data, ofType typeName: String) throws {
-        throw NSError(
-            domain: NSCocoaErrorDomain,
+        throw PluginError.make(
+            .dataTierUnsupported,
             code: NSFileReadUnknownError,
-            userInfo: [NSLocalizedDescriptionKey: "Data tier is unsupported"]
+            description: "Data tier is unsupported"
         )
     }
 
@@ -277,18 +271,18 @@ class ICloudDocument: NSDocument {
         }
 
         guard let input = InputStream(url: sourceURL) else {
-            throw NSError(
-                domain: NSCocoaErrorDomain,
+            throw PluginError.make(
+                .inputStreamOpenFailed,
                 code: NSFileReadUnknownError,
-                userInfo: [NSLocalizedDescriptionKey: "Failed to open input stream"]
+                description: "Failed to open input stream"
             )
         }
 
         guard let output = OutputStream(url: destinationURL, append: false) else {
-            throw NSError(
-                domain: NSCocoaErrorDomain,
+            throw PluginError.make(
+                .outputStreamOpenFailed,
                 code: NSFileWriteUnknownError,
-                userInfo: [NSLocalizedDescriptionKey: "Failed to open output stream"]
+                description: "Failed to open output stream"
             )
         }
 
@@ -305,10 +299,10 @@ class ICloudDocument: NSDocument {
         while input.hasBytesAvailable {
             let read = input.read(&buffer, maxLength: buffer.count)
             if read < 0 {
-                throw input.streamError ?? NSError(
-                    domain: NSCocoaErrorDomain,
+                throw input.streamError ?? PluginError.make(
+                    .streamReadFailed,
                     code: NSFileReadUnknownError,
-                    userInfo: [NSLocalizedDescriptionKey: "Stream read error"]
+                    description: "Stream read error"
                 )
             }
             if read == 0 {
@@ -328,10 +322,10 @@ class ICloudDocument: NSDocument {
                     let message = written == 0
                         ? "Stream write returned 0 bytes (stalled); treating as failure"
                         : "Stream write error"
-                    throw output.streamError ?? NSError(
-                        domain: NSCocoaErrorDomain,
+                    throw output.streamError ?? PluginError.make(
+                        .streamWriteFailed,
                         code: NSFileWriteUnknownError,
-                        userInfo: [NSLocalizedDescriptionKey: message]
+                        description: message
                     )
                 }
                 totalWritten += written
@@ -361,14 +355,7 @@ final class ICloudInPlaceDocument: NSDocument {
             textContents = ""
             return
         }
-        guard let text = String(data: data, encoding: .utf8) else {
-            throw NSError(
-                domain: NSCocoaErrorDomain,
-                code: NSFileReadUnknownError,
-                userInfo: [NSLocalizedDescriptionKey: "Unsupported text encoding"]
-            )
-        }
-        textContents = text
+        textContents = try decodeUTF8Text(data)
     }
 }
 

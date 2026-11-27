@@ -16,6 +16,7 @@ ICloudOperationException decodePlatformException(PlatformException error) {
   final nativeCode = _readInt(payload, 'nativeCode');
   final nativeDescription = _readString(payload, 'nativeDescription');
   final underlying = payload['underlying'];
+  final nativeErrorChain = _readNativeErrorChain(payload['nativeErrorChain']);
   final category = _readString(payload, 'category');
 
   return switch (category) {
@@ -29,6 +30,7 @@ ICloudOperationException decodePlatformException(PlatformException error) {
         nativeCode: nativeCode,
         nativeDescription: nativeDescription,
         underlying: underlying,
+        nativeErrorChain: nativeErrorChain,
       ),
     'containerAccess' => ICloudContainerAccessException(
         operation: operation,
@@ -40,6 +42,7 @@ ICloudOperationException decodePlatformException(PlatformException error) {
         nativeCode: nativeCode,
         nativeDescription: nativeDescription,
         underlying: underlying,
+        nativeErrorChain: nativeErrorChain,
       ),
     'conflict' => ICloudConflictException(
         operation: operation,
@@ -51,6 +54,7 @@ ICloudOperationException decodePlatformException(PlatformException error) {
         nativeCode: nativeCode,
         nativeDescription: nativeDescription,
         underlying: underlying,
+        nativeErrorChain: nativeErrorChain,
       ),
     'coordination' => ICloudCoordinationException(
         operation: operation,
@@ -62,6 +66,7 @@ ICloudOperationException decodePlatformException(PlatformException error) {
         nativeCode: nativeCode,
         nativeDescription: nativeDescription,
         underlying: underlying,
+        nativeErrorChain: nativeErrorChain,
       ),
     'invalidArgument' => ICloudInvalidArgumentException(
         operation: operation,
@@ -73,6 +78,7 @@ ICloudOperationException decodePlatformException(PlatformException error) {
         nativeCode: nativeCode,
         nativeDescription: nativeDescription,
         underlying: underlying,
+        nativeErrorChain: nativeErrorChain,
       ),
     'cancelled' => ICloudCancelledException(
         operation: operation,
@@ -84,6 +90,7 @@ ICloudOperationException decodePlatformException(PlatformException error) {
         nativeCode: nativeCode,
         nativeDescription: nativeDescription,
         underlying: underlying,
+        nativeErrorChain: nativeErrorChain,
       ),
     'initialization' => ICloudInitializationException(
         operation: operation,
@@ -95,6 +102,7 @@ ICloudOperationException decodePlatformException(PlatformException error) {
         nativeCode: nativeCode,
         nativeDescription: nativeDescription,
         underlying: underlying,
+        nativeErrorChain: nativeErrorChain,
       ),
     null || 'unknownNative' => ICloudUnknownNativeException(
         operation: operation,
@@ -106,6 +114,7 @@ ICloudOperationException decodePlatformException(PlatformException error) {
         nativeCode: nativeCode,
         nativeDescription: nativeDescription,
         underlying: underlying,
+        nativeErrorChain: nativeErrorChain,
       ),
     final String otherCategory => ICloudOperationException(
         category: otherCategory,
@@ -118,6 +127,7 @@ ICloudOperationException decodePlatformException(PlatformException error) {
         nativeCode: nativeCode,
         nativeDescription: nativeDescription,
         underlying: underlying,
+        nativeErrorChain: nativeErrorChain,
       ),
   };
 }
@@ -130,4 +140,23 @@ String? _readString(Map<Object?, Object?> payload, String key) {
 int? _readInt(Map<Object?, Object?> payload, String key) {
   final value = payload[key];
   return value is int ? value : null;
+}
+
+List<ICloudNativeError> _readNativeErrorChain(Object? value) {
+  if (value is! List) return const [];
+  final chain = <ICloudNativeError>[];
+  for (final entry in value) {
+    if (entry is! Map) continue;
+    final domain = _readString(entry, 'domain');
+    final code = _readInt(entry, 'code');
+    if (domain == null || code == null) continue;
+    chain.add(
+      ICloudNativeError(
+        domain: domain,
+        code: code,
+        pluginReason: _readString(entry, 'pluginReason'),
+      ),
+    );
+  }
+  return chain;
 }

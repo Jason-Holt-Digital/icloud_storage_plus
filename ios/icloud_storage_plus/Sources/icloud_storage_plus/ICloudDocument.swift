@@ -37,10 +37,10 @@ class ICloudDocument: UIDocument {
 
     override func contents(forType typeName: String) throws -> Any {
         guard let sourceURL = sourceURL else {
-            throw NSError(
-                domain: NSCocoaErrorDomain,
+            throw PluginError.make(
+                .missingSourceURL,
                 code: NSFileWriteUnknownError,
-                userInfo: [NSLocalizedDescriptionKey: "Missing source URL"]
+                description: "Missing source URL"
             )
         }
         return StreamPayload(sourceURL: sourceURL)
@@ -53,10 +53,10 @@ class ICloudDocument: UIDocument {
         for saveOperation: UIDocument.SaveOperation
     ) throws {
         guard let payload = contents as? StreamPayload else {
-            throw NSError(
-                domain: NSCocoaErrorDomain,
+            throw PluginError.make(
+                .invalidWritePayload,
                 code: NSFileWriteUnknownError,
-                userInfo: [NSLocalizedDescriptionKey: "Invalid write payload"]
+                description: "Invalid write payload"
             )
         }
 
@@ -70,10 +70,10 @@ class ICloudDocument: UIDocument {
 
     override func read(from url: URL) throws {
         guard let destinationURL = destinationURL else {
-            throw NSError(
-                domain: NSCocoaErrorDomain,
+            throw PluginError.make(
+                .missingDestinationURL,
                 code: NSFileReadUnknownError,
-                userInfo: [NSLocalizedDescriptionKey: "Missing destination URL"]
+                description: "Missing destination URL"
             )
         }
 
@@ -150,18 +150,18 @@ class ICloudDocument: UIDocument {
         }
 
         guard let input = InputStream(url: sourceURL) else {
-            throw NSError(
-                domain: NSCocoaErrorDomain,
+            throw PluginError.make(
+                .inputStreamOpenFailed,
                 code: NSFileReadUnknownError,
-                userInfo: [NSLocalizedDescriptionKey: "Failed to open input stream"]
+                description: "Failed to open input stream"
             )
         }
 
         guard let output = OutputStream(url: destinationURL, append: false) else {
-            throw NSError(
-                domain: NSCocoaErrorDomain,
+            throw PluginError.make(
+                .outputStreamOpenFailed,
                 code: NSFileWriteUnknownError,
-                userInfo: [NSLocalizedDescriptionKey: "Failed to open output stream"]
+                description: "Failed to open output stream"
             )
         }
 
@@ -178,10 +178,10 @@ class ICloudDocument: UIDocument {
         while input.hasBytesAvailable {
             let read = input.read(&buffer, maxLength: buffer.count)
             if read < 0 {
-                throw input.streamError ?? NSError(
-                    domain: NSCocoaErrorDomain,
+                throw input.streamError ?? PluginError.make(
+                    .streamReadFailed,
                     code: NSFileReadUnknownError,
-                    userInfo: [NSLocalizedDescriptionKey: "Stream read error"]
+                    description: "Stream read error"
                 )
             }
             if read == 0 {
@@ -201,10 +201,10 @@ class ICloudDocument: UIDocument {
                     let message = written == 0
                         ? "Stream write returned 0 bytes (stalled); treating as failure"
                         : "Stream write error"
-                    throw output.streamError ?? NSError(
-                        domain: NSCocoaErrorDomain,
+                    throw output.streamError ?? PluginError.make(
+                        .streamWriteFailed,
                         code: NSFileWriteUnknownError,
-                        userInfo: [NSLocalizedDescriptionKey: message]
+                        description: message
                     )
                 }
                 totalWritten += written
@@ -231,14 +231,7 @@ final class ICloudInPlaceDocument: UIDocument {
                 textContents = ""
                 return
             }
-            guard let text = String(data: data, encoding: .utf8) else {
-                throw NSError(
-                    domain: NSCocoaErrorDomain,
-                    code: NSFileReadUnknownError,
-                    userInfo: [NSLocalizedDescriptionKey: "Unsupported text encoding"]
-                )
-            }
-            textContents = text
+            textContents = try decodeUTF8Text(data)
             return
         }
 
@@ -249,10 +242,10 @@ final class ICloudInPlaceDocument: UIDocument {
                 return
             }
             guard let text = String(data: data, encoding: .utf8) else {
-                throw NSError(
-                    domain: NSCocoaErrorDomain,
+                throw PluginError.make(
+                    .invalidUTF8TextInFileWrapper,
                     code: NSFileReadUnknownError,
-                    userInfo: [NSLocalizedDescriptionKey: "Unsupported text encoding"]
+                    description: "Unsupported text encoding"
                 )
             }
             textContents = text
@@ -264,10 +257,10 @@ final class ICloudInPlaceDocument: UIDocument {
             return
         }
 
-        throw NSError(
-            domain: NSCocoaErrorDomain,
+        throw PluginError.make(
+            .unsupportedDocumentContents,
             code: NSFileReadUnknownError,
-            userInfo: [NSLocalizedDescriptionKey: "Unsupported document contents"]
+            description: "Unsupported document contents"
         )
     }
 
@@ -301,10 +294,10 @@ final class ICloudInPlaceBinaryDocument: UIDocument {
             return
         }
 
-        throw NSError(
-            domain: NSCocoaErrorDomain,
+        throw PluginError.make(
+            .unsupportedDocumentContents,
             code: NSFileReadUnknownError,
-            userInfo: [NSLocalizedDescriptionKey: "Unsupported document contents"]
+            description: "Unsupported document contents"
         )
     }
 
@@ -337,10 +330,10 @@ extension ICloudStoragePlugin {
                     DebugHelper.log("Document closed: \(url.lastPathComponent)")
                 }
             } else {
-                let error = document.lastError ?? NSError(
-                    domain: NSCocoaErrorDomain,
+                let error = document.lastError ?? PluginError.make(
+                    .documentOpenFailed,
                     code: NSFileReadUnknownError,
-                    userInfo: [NSLocalizedDescriptionKey: "Failed to open document"]
+                    description: "Failed to open document"
                 )
                 completion(error)
             }
@@ -373,10 +366,10 @@ extension ICloudStoragePlugin {
                         completion(nil)
                     }
                 } else {
-                    let error = document.lastError ?? NSError(
-                        domain: NSCocoaErrorDomain,
+                    let error = document.lastError ?? PluginError.make(
+                        .documentSaveFailed,
                         code: NSFileWriteUnknownError,
-                        userInfo: [NSLocalizedDescriptionKey: "Failed to save document"]
+                        description: "Failed to save document"
                     )
                     completion(error)
                 }
@@ -415,10 +408,10 @@ extension ICloudStoragePlugin {
                     completion(stateInfo, nil)
                 }
             } else {
-                let error = document.lastError ?? NSError(
-                    domain: NSCocoaErrorDomain,
+                let error = document.lastError ?? PluginError.make(
+                    .documentOpenFailed,
                     code: NSFileReadUnknownError,
-                    userInfo: [NSLocalizedDescriptionKey: "Failed to open document"]
+                    description: "Failed to open document"
                 )
                 completion(nil, error)
             }
@@ -447,10 +440,10 @@ extension ICloudStoragePlugin {
                         completion(nil)
                     }
                 } else {
-                    let error = document.lastError ?? NSError(
-                        domain: NSCocoaErrorDomain,
+                    let error = document.lastError ?? PluginError.make(
+                        .documentSaveFailed,
                         code: NSFileWriteUnknownError,
-                        userInfo: [NSLocalizedDescriptionKey: "Failed to save document"]
+                        description: "Failed to save document"
                     )
                     completion(error)
                 }
@@ -480,10 +473,10 @@ extension ICloudStoragePlugin {
                         completion(nil)
                     }
                 } else {
-                    let error = document.lastError ?? NSError(
-                        domain: NSCocoaErrorDomain,
+                    let error = document.lastError ?? PluginError.make(
+                        .documentSaveFailed,
                         code: NSFileWriteUnknownError,
-                        userInfo: [NSLocalizedDescriptionKey: "Failed to save document"]
+                        description: "Failed to save document"
                     )
                     completion(error)
                 }

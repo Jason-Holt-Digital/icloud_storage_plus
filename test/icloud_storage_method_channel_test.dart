@@ -576,6 +576,139 @@ void main() {
         throwsA(_pluginContractFor('readInPlace')),
       );
     });
+
+    group('native error chain', () {
+      const cocoa = 'NSCocoaErrorDomain';
+      const posix = 'NSPOSIXErrorDomain';
+
+      Future<ICloudOperationException> failReadWith(
+        Map<String, Object?> details,
+      ) async {
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(
+          channel,
+          (methodCall) async => throw PlatformException(
+            code: _nativeCodeError,
+            message: 'Native Code Error',
+            details: details,
+          ),
+        );
+        try {
+          await platform.readInPlace(
+            containerId: containerId,
+            relativePath: 'Documents/journal.json',
+          );
+        } on ICloudOperationException catch (error) {
+          return error;
+        }
+        fail('readInPlace did not throw');
+      }
+
+      test('tells apart failures that all report $cocoa 256', () async {
+        // Chains as the native side sends them for each failure that
+        // surfaces as unknownNative NSCocoaErrorDomain 256.
+        final chains = <String, List<Map<String, Object?>>>{
+          'invalid UTF-8 text': [
+            {'domain': cocoa, 'code': 256, 'pluginReason': 'invalidUTF8Text'},
+          ],
+          'directory at the path': [
+            {'domain': cocoa, 'code': 256},
+            {'domain': posix, 'code': 21},
+          ],
+          'placeholder with materialization off': [
+            {'domain': cocoa, 'code': 256},
+            {'domain': posix, 'code': 11},
+          ],
+          'placeholder download timed out': [
+            {'domain': cocoa, 'code': 256},
+            {'domain': posix, 'code': 60},
+          ],
+          'other I/O error': [
+            {'domain': cocoa, 'code': 256},
+            {'domain': posix, 'code': 5},
+          ],
+          'document failed to open': [
+            {
+              'domain': cocoa,
+              'code': 256,
+              'pluginReason': 'documentOpenFailed',
+            },
+          ],
+          'package contents not UTF-8': [
+            {
+              'domain': cocoa,
+              'code': 256,
+              'pluginReason': 'invalidUTF8TextInFileWrapper',
+            },
+          ],
+        };
+
+        final decoded = <String, List<ICloudNativeError>>{};
+        for (final MapEntry(:key, :value) in chains.entries) {
+          final error = await failReadWith({
+            'category': 'unknownNative',
+            'operation': 'readInPlace',
+            'retryable': false,
+            'nativeDomain': cocoa,
+            'nativeCode': 256,
+            'nativeErrorChain': value,
+          });
+          expect(error, isA<ICloudUnknownNativeException>(), reason: key);
+          expect(error.nativeDomain, cocoa, reason: key);
+          expect(error.nativeCode, 256, reason: key);
+          decoded[key] = error.nativeErrorChain;
+        }
+
+        expect(
+          decoded['directory at the path'],
+          const [
+            ICloudNativeError(domain: cocoa, code: 256),
+            ICloudNativeError(domain: posix, code: 21),
+          ],
+        );
+        expect(
+          decoded['invalid UTF-8 text'],
+          const [
+            ICloudNativeError(
+              domain: cocoa,
+              code: 256,
+              pluginReason: 'invalidUTF8Text',
+            ),
+          ],
+        );
+        final distinct = decoded.values.map((chain) => chain.join('|')).toSet();
+        expect(distinct, hasLength(chains.length));
+      });
+
+      test('is empty when the payload has no chain', () async {
+        final error = await failReadWith({
+          'category': 'unknownNative',
+          'operation': 'readInPlace',
+          'retryable': false,
+        });
+
+        expect(error.nativeErrorChain, isEmpty);
+      });
+
+      test('skips malformed links', () async {
+        final error = await failReadWith({
+          'category': 'unknownNative',
+          'operation': 'readInPlace',
+          'retryable': false,
+          'nativeErrorChain': [
+            {'domain': cocoa, 'code': 256},
+            {'domain': posix},
+            'not a map',
+            {'domain': posix, 'code': 11, 'pluginReason': 3},
+          ],
+        });
+
+        expect(error.nativeErrorChain, const [
+          ICloudNativeError(domain: cocoa, code: 256),
+          ICloudNativeError(domain: posix, code: 11),
+        ]);
+      });
+    });
   });
 
   group('readInPlaceBytes tests:', () {
