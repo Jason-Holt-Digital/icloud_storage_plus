@@ -1,3 +1,5 @@
+import 'package:equatable/equatable.dart';
+
 /// An exception class used for development. It's used when invalid argument
 /// is passed to the API
 class InvalidArgumentException implements Exception {
@@ -8,6 +10,36 @@ class InvalidArgumentException implements Exception {
   /// Method to print the error message
   @override
   String toString() => 'InvalidArgumentException: $_message';
+}
+
+/// One native error in an [ICloudOperationException.nativeErrorChain].
+class ICloudNativeError extends Equatable {
+  /// Creates one link of a native error chain.
+  const ICloudNativeError({
+    required this.domain,
+    required this.code,
+    this.pluginReason,
+  });
+
+  /// Native error domain, such as `NSCocoaErrorDomain`.
+  final String domain;
+
+  /// Native error code.
+  final int code;
+
+  /// Why the plugin built this error itself, such as `invalidUTF8Text`.
+  ///
+  /// Null when the error came from Foundation or another system framework.
+  /// Plugin-built errors reuse Foundation domains and codes, so this is the
+  /// only way to tell them apart.
+  final String? pluginReason;
+
+  @override
+  List<Object?> get props => [domain, code, pluginReason];
+
+  @override
+  String toString() =>
+      '$domain $code${pluginReason == null ? '' : ' ($pluginReason)'}';
 }
 
 /// Base class for typed iCloud operation failures surfaced from native code.
@@ -24,6 +56,7 @@ class ICloudOperationException implements Exception {
     this.nativeCode,
     this.nativeDescription,
     this.underlying,
+    this.nativeErrorChain = const [],
   });
 
   /// Creates a typed method-channel contract failure.
@@ -69,6 +102,12 @@ class ICloudOperationException implements Exception {
   /// Underlying native error payload, when present.
   final Object? underlying;
 
+  /// The native error and each error nested under it, outermost first.
+  ///
+  /// Empty when the failure did not come from a native error. Holds only
+  /// domains, codes, and plugin reasons, never descriptions or paths.
+  final List<ICloudNativeError> nativeErrorChain;
+
   @override
   String toString() => '$category: $message';
 }
@@ -86,6 +125,7 @@ class ICloudItemNotFoundException extends ICloudOperationException {
     super.nativeCode,
     super.nativeDescription,
     super.underlying,
+    super.nativeErrorChain,
   }) : super(category: 'itemNotFound');
 }
 
@@ -102,6 +142,7 @@ class ICloudContainerAccessException extends ICloudOperationException {
     super.nativeCode,
     super.nativeDescription,
     super.underlying,
+    super.nativeErrorChain,
   }) : super(category: 'containerAccess');
 }
 
@@ -121,6 +162,7 @@ class ICloudConflictException extends ICloudOperationException {
     super.nativeCode,
     super.nativeDescription,
     super.underlying,
+    super.nativeErrorChain,
   }) : super(category: 'conflict');
 }
 
@@ -137,6 +179,7 @@ class ICloudCoordinationException extends ICloudOperationException {
     super.nativeCode,
     super.nativeDescription,
     super.underlying,
+    super.nativeErrorChain,
   }) : super(category: 'coordination');
 }
 
@@ -153,6 +196,7 @@ class ICloudInvalidArgumentException extends ICloudOperationException {
     super.nativeCode,
     super.nativeDescription,
     super.underlying,
+    super.nativeErrorChain,
   }) : super(category: 'invalidArgument');
 }
 
@@ -169,6 +213,7 @@ class ICloudCancelledException extends ICloudOperationException {
     super.nativeCode,
     super.nativeDescription,
     super.underlying,
+    super.nativeErrorChain,
   }) : super(category: 'cancelled');
 }
 
@@ -185,6 +230,7 @@ class ICloudInitializationException extends ICloudOperationException {
     super.nativeCode,
     super.nativeDescription,
     super.underlying,
+    super.nativeErrorChain,
   }) : super(category: 'initialization');
 }
 
@@ -201,5 +247,6 @@ class ICloudUnknownNativeException extends ICloudOperationException {
     super.nativeCode,
     super.nativeDescription,
     super.underlying,
+    super.nativeErrorChain,
   }) : super(category: 'unknownNative');
 }

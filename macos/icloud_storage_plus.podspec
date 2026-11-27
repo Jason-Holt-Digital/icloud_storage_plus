@@ -28,6 +28,7 @@ container, with document coordination via UIDocument/NSDocument.
     'icloud_storage_plus/Sources/icloud_storage_plus_foundation/PerPathMutationLane.swift',
     'icloud_storage_plus/Sources/icloud_storage_plus_foundation/UbiquitousItemMaterializer.swift',
     'icloud_storage_plus/Sources/icloud_storage_plus_foundation/UbiquitousItemMover.swift',
+    'icloud_storage_plus/Sources/icloud_storage_plus_foundation/NativeErrorChain.swift',
     'icloud_storage_plus/Sources/icloud_storage_plus_cloudkit/CloudKitAssetTransfers.swift',
     'icloud_storage_plus/Sources/icloud_storage_plus_cloudkit/CloudKitRecordCodec.swift',
     'icloud_storage_plus/Sources/icloud_storage_plus_cloudkit/CloudKitSyncBridge.swift',

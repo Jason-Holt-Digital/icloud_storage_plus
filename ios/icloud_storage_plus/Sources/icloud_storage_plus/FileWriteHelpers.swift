@@ -11,18 +11,18 @@ func streamCopyToURL(from sourceURL: URL, to destinationURL: URL) throws {
     }
 
     guard let input = InputStream(url: sourceURL) else {
-        throw NSError(
-            domain: NSCocoaErrorDomain,
+        throw PluginError.make(
+            .inputStreamOpenFailed,
             code: NSFileReadUnknownError,
-            userInfo: [NSLocalizedDescriptionKey: "Failed to open input stream"]
+            description: "Failed to open input stream"
         )
     }
 
     guard let output = OutputStream(url: destinationURL, append: false) else {
-        throw NSError(
-            domain: NSCocoaErrorDomain,
+        throw PluginError.make(
+            .outputStreamOpenFailed,
             code: NSFileWriteUnknownError,
-            userInfo: [NSLocalizedDescriptionKey: "Failed to open output stream"]
+            description: "Failed to open output stream"
         )
     }
 
@@ -39,10 +39,10 @@ func streamCopyToURL(from sourceURL: URL, to destinationURL: URL) throws {
     while input.hasBytesAvailable {
         let read = input.read(&buffer, maxLength: buffer.count)
         if read < 0 {
-            throw input.streamError ?? NSError(
-                domain: NSCocoaErrorDomain,
+            throw input.streamError ?? PluginError.make(
+                .streamReadFailed,
                 code: NSFileReadUnknownError,
-                userInfo: [NSLocalizedDescriptionKey: "Stream read error"]
+                description: "Stream read error"
             )
         }
         if read == 0 {
@@ -62,10 +62,10 @@ func streamCopyToURL(from sourceURL: URL, to destinationURL: URL) throws {
                 let message = written == 0
                     ? "Stream write returned 0 bytes (stalled); treating as failure"
                     : "Stream write error"
-                throw output.streamError ?? NSError(
-                    domain: NSCocoaErrorDomain,
+                throw output.streamError ?? PluginError.make(
+                    .streamWriteFailed,
                     code: NSFileWriteUnknownError,
-                    userInfo: [NSLocalizedDescriptionKey: message]
+                    description: message
                 )
             }
             totalWritten += written

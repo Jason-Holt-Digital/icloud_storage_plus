@@ -982,13 +982,7 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
       Task { [self] in
         do {
           let data = try await self.coordinatedReadData(at: fileURL)
-          guard let contents = String(data: data, encoding: .utf8) else {
-            throw NSError(
-              domain: NSCocoaErrorDomain,
-              code: NSFileReadUnknownError,
-              userInfo: [NSLocalizedDescriptionKey: "Unsupported text encoding"]
-            )
-          }
+          let contents = try decodeUTF8Text(data)
           DispatchQueue.main.async { result(contents) }
         } catch {
           let mapped = self.mapFileNotFoundError(
@@ -2447,6 +2441,7 @@ public class ICloudStoragePlugin: NSObject, FlutterPlugin {
       details["nativeDomain"] = nativeError.domain
       details["nativeCode"] = nativeError.code
       details["nativeDescription"] = nativeError.localizedDescription
+      details["nativeErrorChain"] = nativeErrorChain(nativeError)
       if let nestedError = nativeError.userInfo[NSUnderlyingErrorKey] {
         details["underlying"] = String(describing: nestedError)
       }
